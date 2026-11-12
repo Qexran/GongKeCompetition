@@ -1,0 +1,32 @@
+{
+  "active": 1,
+  "next_id": 2,
+  "presets": [
+    {
+      "id": 1,
+      "name": "现役主摄（初始导入）",
+      "note": "2026-10-30 从 app_config.h 现值自动导入。这颗主摄接口松动、随时可能换机 —— 换新摄像头先「复制」这套当起点, 再逐项重标。",
+      "values": {
+        "ROAD_DX_IDEAL_PX": "1150",
+        "ROAD_DX_IDEAL_REV_PX": "700",
+        "ROAD_DY_IDEAL_PX": "600",
+        "ROAD_DY_IDEAL_REV_PX": "600",
+        "ROAD_DX_SCALE_MM_PER_PX": "0.26",
+        "ROAD_DY_SCALE_MM_PER_PX": "0.3",
+        "BALL_CX_CENTER": "926",
+        "BALL_CY_CENTER": "408",
+        "BALL_PX_TO_MM_X": "0.3",
+        "BALL_PX_TO_MM_Y": "0.3",
+        "BALL_YAW_SCALE": "1.25",
+        "BALL_YAW_TARGET_DEG": "2.5",
+        "HOSTAGE_CX_CENTER": "948",
+        "HOSTAGE_CY_CENTER": "520",
+        "HOSTAGE_PX_TO_MM_X": "0.18",
+        "HOSTAGE_PX_TO_MM_Y": "0.24",
+        "TARGET_SHOOT_CX_AIM": "975",
+        "TARGET_SHOOT_CY_AIM": "0",
+        "TARGET_SHOOT_GAP_PX": "289"
+      }
+    }
+  ]
+}

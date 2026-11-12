@@ -1,0 +1,25 @@
+{
+  "phrases": [
+    {
+      "name": "发送最新log日志",
+      "text": "树莓派端最后一次运行的log是 \\\\{pi_ip}\\shared\\cv_python\\logs\\logcat_XXXXXXXX_XXXXXX.log",
+      "dynamic": "latest_log"
+    },
+    {
+      "name": "审查修改代码",
+      "text": "请你审查修改的代码是否正确"
+    },
+    {
+      "name": "告诉CC树莓派端的代码位置",
+      "text": "现在远程树莓派端cv_python的文件夹是\\\\{pi_ip}\\shared"
+    },
+    {
+      "name": "自动编译检查",
+      "text": "改完代码后跑 /c/Keil/UV4/UV4.exe -b USER/Template.uvprojx -j0 编译检查代码"
+    },
+    {
+      "name": "获取项目位置",
+      "text": "pi:\\\\{pi_ip}\\shared\\Desktop\\GKS_Competition"
+    }
+  ]
+}

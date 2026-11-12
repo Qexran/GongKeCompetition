@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GKS 控制台 · 地图</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<!-- 多客户端同步: 别人改了文件、而本机这边有未保存改动（或在拖拽/输入）时的常驻提示。
+     ⚠️ 不能用 #toast —— 那是单槽串行队列（2.2s/5s 就没了），而这条必须一直在，
+        直到用户点「↺ 重载」或「稍后」。逻辑在 app.js 的「多客户端同步」一节。 -->
+<div id="notice" class="hidden">
+  <span id="notice-text"></span>
+  <button id="notice-reload" class="btn ghost tiny">↺ 重载</button>
+  <button id="notice-dismiss" class="btn ghost tiny"
+          title="先不管 —— 你的未保存改动不会被覆盖">稍后</button>
+</div>
+
+<header id="topbar">
+  <div class="logo">GKS<span>控制台</span></div>
+  <nav id="tabs"></nav>
+  <div class="spacer"></div>
+  <!-- 各 Tab 专属的操作组: 切到别的 Tab 时整组隐藏（见 switchTab） -->
+  <div id="map-actions" class="tab-actions">
+    <div id="dirty-dot" class="dot hidden" title="有未保存修改"></div>
+    <button id="btn-reload" class="btn ghost" title="放弃页面状态, 重新读 map.c">↺ 重载</button>
+    <button id="btn-save" class="btn primary">保存 map.c</button>
+  </div>
+  <div id="tuning-actions" class="tab-actions hidden">
+    <div id="tuning-dot" class="dot hidden" title="有未保存修改"></div>
+    <button id="btn-tune-reload" class="btn ghost" title="放弃页面状态, 重新读 app_config.h">↺ 重载</button>
+    <button id="btn-tune-save" class="btn primary">保存 app_config.h</button>
+  </div>
+  <div id="oled-actions" class="tab-actions hidden">
+    <div id="oled-dot" class="dot hidden" title="有未保存修改"></div>
+    <button id="btn-oled-reload" class="btn ghost" title="放弃页面状态, 重新读 app_oled_menu.c">↺ 重载</button>
+    <button id="btn-oled-save" class="btn primary"
+            title="写回 Application/app_oled_menu.c；有新汉字时自动补进 glyphs.txt 并重生成字模（编译烧写仍要回 Keil）">保存 OLED 菜单</button>
+  </div>
+</header>
+
+<!-- ==================== Tab: 地图 ==================== -->
+<main id="pane-map" class="pane active">
+  <aside id="palette">
+    <input id="palette-search" type="text" placeholder="搜索积木 / 类型 / 原语…">
+    <div id="palette-list"></div>
+  </aside>
+
+  <div id="canvas-col">
+    <div id="preset-bar">
+      <span class="preset-cap">预设</span>
+      <select id="preset-select" title="切换正在编辑的路线预设"></select>
+      <input id="preset-label" type="text" title="当前预设名（写回 map.c 的头注释）" placeholder="预设名">
+      <button id="preset-add" class="btn ghost" title="新建一个预设（空路线，含一步停车）">＋</button>
+      <button id="preset-dup" class="btn ghost" title="复制当前预设">⧉</button>
+      <button id="preset-del" class="btn ghost" title="删除当前预设">🗑</button>
+      <span class="spacer"></span>
+      <label class="preset-run" title="设备运行的就是这一个（写入 map.c 的 SCRIPT_PRESET_ACTIVE）">
+        <input type="checkbox" id="preset-active"> 设备运行此预设
+      </label>
+      <label class="preset-run" title="勾上 = 声明这张预设可以被「跳到别的预设」当子程序调用（即使里面有握手/重置步骤）。用途：先建一张一次性的机械臂初始化预设，再用跳转串起这张可重入的任务。标记写进 map.h 枚举注释（可重入）">
+        <input type="checkbox" id="preset-reentrant"> 可重入的任务
+      </label>
+    </div>
+    <section id="canvas">
+      <div id="canvas-inner"></div>
+    </section>
+  </div>
+
+  <aside id="inspector">
+    <div id="inspector-body">
+      <p class="hint">点选积木或分区查看详情</p>
+    </div>
+  </aside>
+
+  <div id="trash" title="拖入积木删除">🗑</div>
+</main>
+
+<!-- ==================== Tab: 调参 ==================== -->
+<main id="pane-tuning" class="pane">
+  <div id="tuning-body">
+    <div id="tuning-bar">
+      <button id="tune-picker" class="btn ghost" title="勾选要在页面上显示哪些参数">☰ 参数选择</button>
+      <span id="tune-count" class="tune-count"></span>
+      <span class="spacer"></span>
+      <label class="tune-sort" title="开启后才能拖动改顺序（顺序只影响本页, 不回写 app_config.h）">
+        <input type="checkbox" id="tune-sortmode"> 排序
+      </label>
+      <button id="tune-new" class="btn ghost" title="新建一个宏并写回 app_config.h">＋ 新建参数</button>
+    </div>
+    <div id="tuning-canvas"></div>
+    <p class="hint">双击参数名原地改名；右键改单位/换算/范围/备注；顺序与勾选存在 tuning.json，元数据写在 app_config.h 注释里。</p>
+  </div>
+</main>
+
+<!-- ==================== Tab: 位移 ====================
+     路线位移变量（app_config.h「路线位移变量」段）的可视化管理:
+     左 = 变量增删改查（改值/改名复用 /api/tuning, 删除走 /api/moves 且先查 map.c 引用）;
+     右 = 示意图（moves.json: 图片 + 起点标记 + 线段绑定）。
+     ⚠️ 线段是**纯可视化标注**（"这个变量对应图上这一段路"）, 不做比例尺/投影换算 ——
+        数值只在左边改。 -->
+<main id="pane-moves" class="pane">
+  <div id="moves-body">
+    <aside id="moves-left" class="tools-card">
+      <div class="moves-bar">
+        <b>位移变量</b>
+        <span class="spacer"></span>
+        <button id="moves-add" class="btn ghost" title="新增一个位移变量（写回 app_config.h 的「路线位移变量」段）">＋ 新增</button>
+        <button id="moves-save" class="btn" title="把改过的数值写回 app_config.h（备份 .bak）">保存数值</button>
+      </div>
+      <p class="hint">值 = 「默认路线」各步世界系平移的距离 [mm]。改完数值要 Keil 重编译烧录才上车；双击译名改名；删除前自动查 map.c 引用。</p>
+      <div id="moves-vars"></div>
+    </aside>
+    <section id="moves-right" class="tools-card">
+      <div class="moves-bar">
+        <b>示意图</b>
+        <input id="moves-img-path" class="moves-img-path" title="图片路径（仓库内相对路径, 存 moves.json）">
+        <span class="moves-hint-inline">拖线段端点改位置 · 拖 ⭕ 改起点 · 在图上拖动画新线段</span>
+        <span class="spacer"></span>
+        <button id="moves-del-seg" class="btn danger hidden" title="删除选中的线段（只删标注, 不碰变量）">删除线段</button>
+      </div>
+      <div id="moves-sel-panel" class="moves-bar hidden">
+        <span id="moves-sel-label">选中线段:</span>
+        <select id="moves-sel-var" class="p-select" title="这条线段标注的是哪个变量"></select>
+      </div>
+      <div id="moves-map-box">
+        <canvas id="moves-map" width="800" height="600"></canvas>
+        <div id="moves-map-empty" class="hidden">示意图加载失败 —— 检查上方图片路径（须是仓库内相对路径）</div>
+      </div>
+    </section>
+  </div>
+</main>
+
+<!-- ==================== Tab: 自定义 ====================
+     自定义开关 = STEP_IF 的编译期条件判据: 在这里新增开关 → app_script.h 的
+     emScriptCondTdf 生成块多一个成员（条件下拉多一个「自定义:xxx」）+ app_config.h
+     「自定义开关」段多一个 0/1 宏。点击切换 = 改宏值, Keil 重编译烧录才上车。
+     右键开关 = 编辑弹窗（译名/分类/备注）; 双击名字 = 改译名; 分类只存清单 JSON（纯 UI 分组）。 -->
+<main id="pane-switches" class="pane">
+  <div id="switches-body">
+    <section class="tools-card" id="switches-card">
+      <div class="moves-bar">
+        <b>自定义开关</b>
+        <span class="moves-hint-inline">点击切换 · 双击名字改名 · 右键编辑</span>
+        <span class="spacer"></span>
+        <button id="sw-add" class="btn ghost" title="新增一个开关（写 app_config.h 宏 + app_script.h/.c 生成块）">＋ 新增开关</button>
+      </div>
+      <p class="hint">开关是 IF 积木的**编译期**条件：新增后要在「地图」Tab 重拖 IF（或刷新后条件下拉里选它），切换状态后要 Keil 重编译烧录才上车。</p>
+      <div id="switches-list"></div>
+    </section>
+  </div>
+</main>
+
+<div id="toast" class="hidden"></div>
+
+<!-- ==================== Tab: 采集 ====================
+     数据集采集: 摄像头预览 + 分类存进 vision/datasets/raw/<类别>/。
+     · opencv-python 是这个 Tab 唯一的可选依赖: 没装就在面板里提示 pip 命令（见 capSyncState
+       的 available:false 分支）, 其余四个 Tab 一位不受影响。
+     · 预览是「单帧轮询 + canvas」而不是 MJPEG —— 服务端只有 _send 一个响应写入口, 流式响应
+       一旦有异常会在半个流里插状态行。详见 capture.py 顶部的说明。
+     · 类别名/计数/状态**全部由服务端下发**（GET /api/capture）, 这里不写死任何类别。 -->
+<main id="pane-capture" class="pane">
+  <div id="cap-body">
+    <section class="tools-card">
+      <h3>摄像头
+        <span class="spacer"></span>
+        <label class="cap-sw" title="关掉即释放摄像头设备（别的程序才抢得到它），预览与采集一并停掉；状态记在 cap.json，下次开控制台仍生效">
+          <input type="checkbox" id="cap-enable" checked> 启用
+        </label>
+        <button class="btn ghost tiny" id="cap-rescan" title="重新枚举可用摄像头（扫描期间画面会暂停几秒）">↻ 重新扫描</button>
+      </h3>
+      <div id="cap-cameras">
+        <p class="hint">点「重新扫描」列出可用摄像头。</p>
+      </div>
+    </section>
+
+    <div id="cap-cols">
+      <section class="tools-card">
+        <h3>预览</h3>
+        <div id="cap-view">
+          <canvas id="cap-canvas" width="960" height="540"></canvas>
+          <div id="cap-offline">
+            <div>⚠ 没有画面</div>
+            <div class="sub" id="cap-overlay-text">摄像头未启动</div>
+          </div>
+          <div id="cap-fps">-- fps</div>
+        </div>
+        <div id="cap-status">
+          <span id="cap-led" class="led off" title="摄像头状态"></span>
+          <span id="cap-status-text">正在读取状态…</span>
+          <span class="spacer"></span>
+          <code id="cap-res"></code>
+        </div>
+      </section>
+
+      <section class="tools-card">
+        <h3>类别（点击选择）</h3>
+        <div id="cap-classes" class="cap-classes"></div>
+        <h3>操作</h3>
+        <div class="cap-actions">
+          <button class="btn primary" id="cap-shot">📷 采集一张 [空格]</button>
+        </div>
+        <div class="cap-actions">
+          <label class="cap-int">自动间隔(秒)
+            <input type="number" id="cap-interval" min="0.1" step="0.1" value="2.0">
+          </label>
+          <button class="btn ghost" id="cap-auto">▶ 开始自动 [A]</button>
+        </div>
+        <p class="hint">空格采集 · 1-4 切类别 · A 启停自动。图存进
+          <code>vision/datasets/raw/&lt;类别&gt;/</code>，未标注前 <code>split_dataset.py</code> 不会收它。</p>
+      </section>
+    </div>
+
+    <section class="tools-card grow">
+      <h3>日志
+        <span class="spacer"></span>
+        <button class="btn ghost tiny" id="cap-reveal" title="在资源管理器里打开采集目录">📁 打开目录</button>
+        <button class="btn ghost tiny" id="cap-log-clear">清空</button>
+      </h3>
+      <pre id="cap-log"></pre>
+    </section>
+  </div>
+</main>
+
+<!-- ==================== Tab: 调试助手 ==================== -->
+<main id="pane-tools" class="pane">
+  <div id="tools-body">
+    <!-- 本机网络（点卡片复制） -->
+    <div id="tools-net">
+      <button class="net-card" id="net-local" title="点击复制"><span>本机 IP</span><b>—</b></button>
+      <button class="net-card" id="net-console" title="点击复制这个地址发给队友（同一局域网内就能打开本控制台）"><span>本控制台</span><b>—</b></button>
+      <button class="net-card" id="net-pi" title="点击复制"><span>树莓派 IP</span><b>—</b></button>
+      <button class="net-card" id="net-ssh" title="点击复制"><span>SSH</span><b>—</b></button>
+      <button class="net-card" id="net-share" title="点击复制网络位置地址（可直接粘进资源管理器）"><span>网络位置</span><b>—</b></button>
+      <span class="spacer"></span>
+      <button id="btn-tools-refresh" class="btn ghost" title="重新探测本机 IP（换网后点这个）">↻ 重新检测</button>
+    </div>
+
+    <div id="tools-cols">
+      <section class="tools-card">
+        <h3>一键操作</h3>
+        <label class="dryrun" title="只打印将要改什么，不真正写 ~/.ssh/config、不动网络位置">
+          <input type="checkbox" id="tools-dryrun"> 仅预览（不真正改动）
+        </label>
+        <button class="btn tool" id="tool-update">🔄 更新 SSH 和网络位置</button>
+        <button class="btn tool" id="tool-rdp">🖥 远程桌面连接</button>
+        <button class="btn tool" id="tool-folder">📁 打开远程文件夹</button>
+        <button class="btn tool" id="tool-trae">🖥️ 启动远程 Trae</button>
+        <button class="btn tool" id="tool-vscode">🖥️ 启动远程 VSCode</button>
+        <button class="btn tool" id="tool-console">📊 启动树莓派控制台</button>
+      </section>
+
+      <section class="tools-card">
+        <h3>常用语（点击复制）</h3>
+        <div id="phrase-list"></div>
+        <div class="phrase-btns">
+          <button class="btn ghost" id="phrase-add">＋ 新增</button>
+          <button class="btn ghost" id="phrase-edit">✎ 编辑</button>
+          <button class="btn ghost" id="phrase-del">✕ 删除</button>
+        </div>
+      </section>
+    </div>
+
+    <section class="tools-card grow">
+      <h3>日志 <button class="btn ghost tiny" id="tools-log-clear">清空</button></h3>
+      <pre id="tools-log"></pre>
+    </section>
+  </div>
+</main>
+
+<!-- ==================== Tab: 蓝牙 ====================
+     走蓝牙串口（固件 UART5）读写单片机运行时参数、点动机械臂。
+     · 「Beam 运行时参数」区的每一行都由设备上报（$B,LIST）驱动渲染,
+        参数名/中文名/分组/单位/类型/范围/当前值全部来自固件 app_beam.c —— 不写死默认值。
+     · 「机械臂编辑」只能在脚本停在握手等待时进入（设备会回 NOTEDIT/NOHANDSHAKE）,
+        所以点动和路线抢不了舵机。 -->
+<!-- Tab「蓝牙」: 调参用 —— 连接 + Beam 运行时参数 + 日志。
+     机械臂编辑已搬到独立的「机械臂」Tab（那边才有滑杆/预设/大积木）。
+     两边的「连接」是同一个面板组件、同一条链路。 -->
+<main id="pane-bt" class="pane">
+  <div id="bt-body">
+
+    <section class="tools-card">
+      <h3>连接 <span class="hint">与「机械臂」Tab 共用同一条链路</span></h3>
+      <div id="bt-conn-mount"></div>
+    </section>
+
+    <!-- 参数与日志左右两栏: 左=参数（排版对齐「调参」Tab）, 右=日志, 各自滚动。
+         窄窗口由 CSS 的 media query 退回上下堆叠。 -->
+    <div id="bt-split">
+      <section class="tools-card grow">
+        <h3>Beam 运行时参数
+          <span class="spacer"></span>
+          <label class="bt-auto"><input type="checkbox" id="bt-param-auto"> 自动刷新</label>
+          <button class="btn ghost tiny" id="bt-param-read">读取参数</button>
+        </h3>
+        <div id="bt-params">
+          <p class="hint">未连接。选好串口 → 连接 → 点「读取参数」。</p>
+        </div>
+      </section>
+
+      <section class="tools-card grow">
+        <h3>日志 <button class="btn ghost tiny" id="bt-log-clear">清空</button></h3>
+        <pre id="bt-log"></pre>
+      </section>
+    </div>
+  </div>
+</main>
+
+<!-- Tab「机械臂」: 台架上录臂动作 → 存成动作预设 → 变成「地图」积木库里的一块大积木。
+     界面像「地图」(左画布 + 右面板), 但**没有积木库**: 子积木只能由「记录当前位姿」
+     与「加延时」产生。播放/点动都要求设备在编辑模式（脚本停在握手等待阶段 1）。 -->
+<main id="pane-arm" class="pane">
+  <div id="arm-bar">
+    <label class="arm-lab" for="arm-preset-select">预设</label>
+    <select id="arm-preset-select" title="动作预设（= 一个保存过的动作）"></select>
+    <input id="arm-title" class="arm-title" placeholder="动作标题（会出现在积木库里）">
+    <input id="arm-note" class="arm-note" placeholder="备注（可选）">
+    <select id="arm-mode" title="这个动作怎么执行：路线里那块大积木（阻塞到位＝等你看到车停着；启动即返回＝车先走、臂在后台接着动），排爆抓取/反恐任务里选中它时、以及它们末尾的复位也跟着这个设定">
+      <option value="wait">阻塞到位</option>
+      <option value="nowait">启动即返回</option>
+    </select>
+    <span class="spacer"></span>
+    <button class="btn ghost tiny" id="arm-undo" title="撤回 (Ctrl+Z)">↶</button>
+    <button class="btn ghost tiny" id="arm-redo" title="重做 (Ctrl+Y)">↷</button>
+    <button class="btn ghost tiny" id="arm-preset-add" title="新建一个动作预设">＋ 新建</button>
+    <button class="btn ghost tiny" id="arm-preset-dup" title="复制当前预设">⧉ 复制</button>
+    <button class="btn ghost tiny" id="arm-preset-del" title="删除当前预设（会先在回收站留一份）">🗑 删除</button>
+    <button class="btn ghost tiny" id="arm-trash-open" title="被删掉的预设都在这里">♻ 回收站</button>
+    <button class="btn primary tiny" id="arm-save" title="把全部预设写回 Application/app_arm_action.c">保存动作</button>
+  </div>
+
+  <div id="arm-canvas">
+    <div id="arm-canvas-inner"></div>
+    <div id="arm-trash" title="把子积木拖到这里删除">🗑</div>
+  </div>
+
+  <aside id="arm-side">
+    <section class="tools-card">
+      <h3>连接</h3>
+      <div id="arm-conn-mount">
+        <!-- 「进入编辑模式 / 退出」由 makeConnPanel 搬进它搭的
+             「↻刷新 / 连接 / 断开」那一行（见 app.js 的 opt.extra）—— 整个连接生命周期
+             排在一起: 选串口 → 连接 → 进入编辑模式 → 退出 → 断开。
+             ⚠️ 元素与 id 必须留在 HTML 里（服务端测试要核对 app.js 里 getElementById 的
+                字面量都在本文件里, 由 JS 现搭 id 会让它失配）。放在 mount 里只是**占位**:
+                工厂开工会先清空 mount, 所以它得先被抓住引用再搬走（那一步在 app.js 注释里）。
+             ⚠️ JS 没跑起来时它就这么露在卡片里 —— 那样也仍然能用（优雅降级）。 -->
+        <div id="arm-edit-row" class="conn-row">
+          <button class="btn ghost" id="arm-edit-on">进入编辑模式</button>
+          <button class="btn ghost" id="arm-edit-off" disabled>退出</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 「进入编辑模式 / 退出」搬去了上面的「连接」卡片
+         （紧跟 连接/断开 —— 连接生命周期排在一起）。这里只剩录/播。 -->
+    <section class="tools-card">
+      <h3>位姿</h3>
+      <div class="arm-btns">
+        <button class="btn ghost" id="arm-record">＋ 记录当前位姿</button>
+        <button class="btn ghost" id="arm-add-delay">＋ 加延时</button>
+      </div>
+      <div class="arm-btns">
+        <button class="btn ghost" id="arm-play-all"
+                title="按画布上的顺序播一遍（未保存的编辑也能播）">▶ 播放整个序列</button>
+        <button class="btn ghost" id="arm-play-device"
+                title="让固件播它编译进去的那一份 —— 与路线里同一个函数">▶ 播放固件里这一份</button>
+      </div>
+      <p class="hint">
+        播放走的是比赛同一套原语（S 曲线 + 到位轮询）；拖滑杆则走固件的「跟手模式」，不走曲线。
+      </p>
+    </section>
+
+    <!-- 关节滑杆单独一张卡, 而且**不参与 flex 伸缩** ——
+         曾经它在「位姿」卡里(grow, min-height 160px), 卡片内部又是 flex 列, 而它是唯一
+         带 overflow 的项 → 自动 min-height:0 → 被压成 0 高。表现就是「滑杆凭空消失」:
+         标题和按钮都在, 就是没有滑杆, 而 #arm-side 还没溢出所以连滚动条都没有。 -->
+    <section class="tools-card">
+      <h3>关节 <span id="arm-joints-note" class="hint"></span>
+        <span class="spacer"></span>
+        <button class="btn ghost tiny" id="arm-get-pose" disabled
+                title="读设备实时角度并填到滑杆上（只回读，不会命令机械臂动）。需在编辑模式下">获取当前位姿</button>
+      </h3>
+      <div id="arm-joints" class="bt-joints-box"><p class="hint">正在加载…</p></div>
+    </section>
+
+    <section class="tools-card grow">
+      <h3>日志 <button class="btn ghost tiny" id="arm-log-clear">清空</button></h3>
+      <pre id="arm-log"></pre>
+    </section>
+  </aside>
+</main>
+
+<!-- ==================== Tab: 底盘动作组 ====================
+     编辑 Application/app_chassis_action.c 的「数据区」—— 时间轴速度混合的动作组。
+     · 顶栏 = 组选择/标题/备注 + 新建/复制/删除/回收站/保存（同「机械臂」Tab 的布局）。
+     · 左 = 条目表（平移段/转弯段/臂事件/等臂事件; 每行起点 ms 吸附 20ms 网格）
+       + 只读时间轴条（按起点/时长铺色块, 一眼看出叠加）; 平移段时长 = 估时×k 现算。
+     · 右 = 蓝牙连接 + 编辑模式 + ▶预览（实速! 与比赛同一条固件播放器）+ ⏹停止。
+     · 保存后自动出现在「地图」积木库里（server.py::_chact_entries 虚拟的大积木）。 -->
+<main id="pane-chact" class="pane">
+  <div id="chact-bar">
+    <label class="arm-lab" for="chact-group-select">动作组</label>
+    <select id="chact-group-select" title="已保存的动作组（最后一个保存过的）"></select>
+    <input id="chact-title" class="arm-title" placeholder="动作组标题（会出现在积木库里）">
+    <input id="chact-note" class="arm-note" placeholder="备注（可选）">
+    <span class="spacer"></span>
+    <button class="btn ghost tiny" id="chact-group-add" title="新建一个空动作组">＋ 新建</button>
+    <button class="btn ghost tiny" id="chact-group-dup" title="复制当前动作组">⧉ 复制</button>
+    <button class="btn ghost tiny" id="chact-group-del" title="删除当前动作组（先进回收站）">🗑 删除</button>
+    <button class="btn ghost tiny" id="chact-trash-open" title="被删掉的组都在这里">⬆ 回收站</button>
+    <button class="btn primary tiny" id="chact-save" title="把全部动作组写回 Application/app_chassis_action.c">保存动作组</button>
+    <button class="btn ghost tiny" id="chact-reload" title="丢弃本地修改, 重新从源文件读">重载</button>
+  </div>
+
+  <div id="chact-main">
+    <div id="chact-left">
+      <div class="chact-addrow">
+        <button class="btn ghost tiny" id="chact-add-move">＋ 平移段</button>
+        <button class="btn ghost tiny" id="chact-add-turn">＋ 转弯段</button>
+        <button class="btn ghost tiny" id="chact-add-arm">＋ 臂动作</button>
+        <button class="btn ghost tiny" id="chact-add-wait">＋ 等臂空闲</button>
+        <span class="hint" id="chact-hint">起点吸附 20ms 网格 · 平移段时长=估时×k（k=蓝牙「底盘动作组」组, 排版用宏默认值）· 转弯 ±90 倍数, 相对（从当前航向再转）/绝对（直接咬这个航向）, 转到位为止（无段上限）</span>
+      </div>
+      <div id="chact-timeline" class="chact-timeline"></div>
+      <div id="chact-items"></div>
+    </div>
+
+    <aside id="chact-side">
+      <section class="tools-card">
+        <div id="chact-conn-mount"></div>
+        <div class="conn-row" id="chact-edit-row">
+          <button class="btn ghost" id="chact-edit-on">进入编辑模式</button>
+          <button class="btn ghost" id="chact-edit-off" disabled>退出</button>
+        </div>
+        <div class="chact-btns">
+          <button class="btn primary" id="chact-play"
+                  title="把控制台当前这一份（含未保存修改）蓝牙推进固件草稿区, 立即播放 —— 所见即所播。车会动! 实速。⚠ 路线/比赛仍跑编译版: 改完要上比赛记得 保存 + Keil 重编译 + 烧录">▶ 预览整组</button>
+          <button class="btn ghost" id="chact-stop" title="停止预览（含已投出的臂动作）">⏹ 停止</button>
+          <button class="btn ghost" id="chact-hr0"
+                  title="航向关系重置: 把世界航向账面对齐到当前车头方向（重建上电时的关系）。搬完车、摆正朝向后按 —— 相对转弯/保持/世界系平移都以此刻为 0° 基准。不动车">⌖ 航向归零</button>
+        </div>
+        <div class="hint">预览 = 蓝牙推送的草稿（断电即失）; 路线/比赛 = 编译进固件的版本</div>
+        <div class="hint" id="chact-busy">播放器: 空闲</div>
+      </section>
+
+      <section class="tools-card" id="chact-tune-card">
+        <h3>调参（蓝牙实时） <button class="btn ghost tiny" id="chact-tune-read"
+            title="从设备回读当前值（断电回 app_config.h 宏）">↻ 回读</button></h3>
+        <div id="chact-tune-rows"></div>
+        <div class="hint">改了立即下发（$B,SET, 播放中也生效）; 断电回宏, 满意后写回 app_config.h 固化。未连接蓝牙时显示宏默认值且不可改。</div>
+      </section>
+
+      <section class="tools-card" id="chact-trash-card">
+        <h3>回收站 <button class="btn ghost tiny" id="chact-trash-close">收起</button></h3>
+        <div id="chact-trash-list"><p class="hint">（空）</p></div>
+      </section>
+
+      <section class="tools-card grow">
+        <h3>日志 <button class="btn ghost tiny" id="chact-log-clear">清空</button></h3>
+        <pre id="chact-log"></pre>
+      </section>
+    </aside>
+  </div>
+</main>
+
+<!-- ==================== Tab: 标定 ====================
+     主摄标定预设的管理中心: 一台主摄一套预设 —— 看路/色球/人质/射靶粗调 四组里
+     随主摄个体变的量（图像列/行设定点 + px↔mm 比例尺, 清单 = tuning.py 的 CALIB_PARAMS）。
+     · 「保存预设」只写 tools/webconsole/calib.json（入库）;
+     · 「设为当前」才写回 app_config.h 的宏 —— 之后要在 Keil 全量重编译烧录才上车;
+     · 这批参数在「调参」Tab 不再出现, 以后统一在这里改。 -->
+<main id="pane-calib" class="pane">
+  <div id="calib-bar">
+    <label class="arm-lab" for="calib-select">预设</label>
+    <select id="calib-select" title="按主摄像头保存的标定预设（★ = 当前写进宏里的那套）"></select>
+    <input id="calib-name" class="arm-title" placeholder="预设名（如: 主摄A·现役）">
+    <input id="calib-note" class="arm-note" placeholder="备注（可选, 如: 2026-10 标 / 换过镜头）">
+    <span class="spacer"></span>
+    <button class="btn ghost tiny" id="calib-add" title="以当前宏值为种子新建一套预设（换新摄像头从这开始）">＋ 新建</button>
+    <button class="btn ghost tiny" id="calib-dup" title="复制当前预设（拿旧相机的标定当新相机的起点）">⧉ 复制</button>
+    <button class="btn ghost tiny" id="calib-del" title="删除当前预设（当前生效的那套不可删）">🗑 删除</button>
+    <button class="btn primary tiny" id="calib-save" title="把预设列表写进 tools/webconsole/calib.json（不碰 app_config.h）">保存预设</button>
+    <button class="btn primary tiny" id="calib-apply" title="把当前预设写回 app_config.h 的宏（自动备份 .bak）—— 之后要在 Keil 全量重编译烧录, 车上才吃到">设为当前 ★</button>
+    <button class="btn ghost tiny" id="calib-reload" title="丢弃本地修改, 重新读">重载</button>
+  </div>
+
+  <div id="calib-main">
+    <div id="calib-left">
+      <div id="calib-error" class="calib-error hidden"></div>
+      <div id="calib-tables"></div>
+    </div>
+
+    <aside id="calib-side">
+      <section class="tools-card">
+        <h3>换新摄像头怎么用</h3>
+        <div class="hint" id="calib-status"></div>
+        <div class="hint">
+          ① 「＋ 新建」（拿当前宏值当种子）→ ② 现场标定: 值改在预设里
+          （或 OLED/蓝牙当场调完把终值抄进来）→ ③ 「保存预设」→
+          ④ 「设为当前」写回 app_config.h → ⑤ Keil 全量重编译烧录。
+          <b>比赛跑的永远是编译进固件的那套宏</b> —— 换预设不做第④⑤步等于没换。
+        </div>
+        <div class="hint">
+          右侧「宏」一列 = app_config.h 里的现值; 与预设值不一致（橙色）= 改了还没「设为当前」。
+          OLED/蓝牙上的调参改的是车上 RAM, 断电回宏 —— 标定完记得回这里固化。
+        </div>
+      </section>
+    </aside>
+  </div>
+</main>
+
+<!-- ==================== Tab: OLED ====================
+     编辑 Application/app_oled_menu.c 的「数据区」（OLED 菜单的表）。
+     · 左 = 页面表（前两条是代码页, 锁定）; 中 = 选中那张表的项; 右 = 128×64 预览。
+     · 预览**按 glyphs.txt 的覆盖率**画: 字表里没有的汉字画成方框问号（与车上一致）
+       —— 预览即验收。
+     · 三个下拉（动作 / 参数 / 子表）的选项全部由服务端从源码派生, 这里不写死。 -->
+<main id="pane-oled" class="pane">
+  <aside id="oled-palette">
+    <input id="oled-palette-search" type="text" placeholder="搜索积木…">
+    <div id="oled-palette-list"></div>
+  </aside>
+
+  <div id="oled-canvas-col">
+    <div id="oled-bar">
+      <span class="oled-cap-label">页面</span>
+      <div id="oled-page-chips"></div>
+      <button class="btn ghost tiny" id="oled-page-add" title="新增一张菜单页">＋</button>
+      <span class="spacer"></span>
+      <button class="btn ghost tiny" id="oled-sub-add"
+              title="新增一张子菜单表（随后拖一块「子菜单」进来引用它）">＋ 子菜单表</button>
+    </div>
+
+    <div id="oled-bar2">
+      <span class="oled-cap-label">表</span>
+      <select id="oled-list-select" title="选一张表来编辑（页面用表 / 子菜单表）"></select>
+      <span id="oled-list-title"></span>
+      <span class="spacer"></span>
+      <span id="oled-count" class="oled-cap"></span>
+    </div>
+
+    <section id="oled-canvas">
+      <div id="oled-canvas-inner"></div>
+    </section>
+    <div id="oled-trash" title="把积木拖到这里删除">🗑</div>
+  </div>
+
+  <aside id="oled-side">
+    <section class="tools-card">
+      <h3>预览</h3>
+      <!-- 逻辑尺寸 = 一个「OLED 模块」：外框 + 128×64 屏玻璃（画在 canvas 里, 见 oledDrawModule） -->
+      <canvas id="oled-screen" width="144" height="96"></canvas>
+      <div id="oled-preview-info"></div>
+    </section>
+  </aside>
+</main>
+
+<!-- 常用语编辑（不复用上面的 #modal: 那个的保存按钮写死了「写回 app_script.h」） -->
+<div id="pmodal" class="hidden">
+  <div class="modal-box narrow">
+    <div class="modal-head">
+      <span id="pmodal-title"></span>
+      <button id="pmodal-close" title="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <label class="fld">名称<input id="pm-name" type="text" placeholder="如 审查代码"></label>
+      <label class="fld">内容（支持 <code>{pi_ip}</code> 变量）<textarea id="pm-text" rows="4"></textarea></label>
+      <label class="pm-check">
+        <input type="checkbox" id="pm-dynamic"> 动态获取最新日志（勾选后自动扫描远程共享，替换上面内容）
+      </label>
+    </div>
+    <div class="modal-foot">
+      <button id="pmodal-cancel" class="btn ghost">取消</button>
+      <button id="pmodal-save" class="btn primary">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 「调参」Tab 的通用对话框（参数选择 / 新建参数 / 编辑元数据共用, 内容由 JS 现搭） -->
+<div id="tmodal" class="hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span id="tmodal-title"></span>
+      <button id="tmodal-close" title="关闭">✕</button>
+    </div>
+    <div class="modal-body" id="tmodal-body"></div>
+    <div class="modal-foot">
+      <button id="tmodal-cancel" class="btn ghost">取消</button>
+      <button id="tmodal-save" class="btn primary">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 积木元数据编辑器（右键积木库条目或画布积木打开） -->
+<div id="modal" class="hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span id="modal-title"></span>
+      <button id="modal-close" title="关闭">✕</button>
+    </div>
+    <div id="modal-body"></div>
+    <div class="modal-foot">
+      <button id="modal-cancel" class="btn ghost">取消</button>
+      <button id="modal-save" class="btn primary">保存并写回 app_script.h</button>
+    </div>
+  </div>
+</div>
+
+<!-- 通用调参行的「参数」选择弹窗（OLED Tab）——
+     几百项（Beam 表 + Pi 参数表, 数量随源码变）塞进下拉框没法用, 所以按来源+分组+搜索来选。
+     ⚠️ 清单由服务端现扫两张源码表（/api/oled 的 params），这里不写死任何参数名。 -->
+<div id="paramodal" class="hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span id="paramodal-title">选参数（Beam 表 / 树莓派 config.py）</span>
+      <button id="paramodal-close" title="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="pm-bar">
+        <input id="paramodal-search" type="text" placeholder="搜索 参数名 / 中文名 / 分组…">
+        <div class="pm-src">
+          <button class="pm-src-btn cur" data-src="all">全部</button>
+          <button class="pm-src-btn" data-src="beam">本机 Beam</button>
+          <button class="pm-src-btn" data-src="pi">树莓派</button>
+        </div>
+      </div>
+      <p class="modal-hint" id="paramodal-hint"></p>
+      <div id="paramodal-list"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 显示映射弹窗（OLED Tab 调参行的「映射」按钮, 2026-10-18 加）:
+     下拉类参数的每个真选项配一个屏上短标签 + 拖动排序（= OLED 上 LEFT/RIGHT 的
+     循环顺序）。清单来自该参数自述的 options, 这里不写死。 -->
+<div id="mapmodal" class="hidden">
+  <div class="modal-box">
+    <div class="modal-head">
+      <span id="mapmodal-title">显示映射</span>
+      <button id="mapmodal-close" title="关闭">✕</button>
+    </div>
+    <div class="modal-body">
+      <p class="modal-hint">每行 = 一个真选项：右边填 OLED 上显示的**短标签**（≤3 个汉字，
+        留空 = 用原标签）。<b>拖动 ⠿ 排序</b> = 车上 LEFT/RIGHT 的循环顺序。值本身不变。</p>
+      <div id="mapmodal-list"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="mapmodal-clear" class="btn ghost">清除映射（用原标签/原顺序）</button>
+      <span style="flex:1"></span>
+      <button id="mapmodal-cancel" class="btn ghost">取消</button>
+      <button id="mapmodal-save" class="btn primary">确定</button>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js" defer></script>
+</body>
+</html>

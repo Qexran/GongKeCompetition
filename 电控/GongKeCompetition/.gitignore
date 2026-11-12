@@ -1,0 +1,59 @@
+
+MDK-ARM/GongKeCompetition
+MDK-ARM/*.log
+MDK-ARM/EventRecorderStub.scvd
+MDK-ARM/GongKeCompetition.uvguix.Administrator
+MDK-ARM/startup_stm32f407xx.lst
+
+# 视觉训练：数据集与训练产物不入库
+vision/datasets/
+vision/runs/
+vision/.venv/
+vision/*.pt
+vision/*.onnx
+runs/
+__pycache__/
+
+# Web 控制台: map.c 保存前自动备份
+Application/map.c.bak
+
+# Web 控制台: map.h（预设注册表枚举生成块）写回前自动备份
+Application/map.h.bak
+
+# Web 控制台: app_script.h 元数据写回前自动备份
+Application/app_script.h.bak
+
+# Web 控制台: app_config.h 调参写回前自动备份
+Application/app_config.h.bak
+
+# Web 控制台: 机械臂动作预设写回前自动备份（.c 与 .h 各一份）
+Application/app_arm_action.c.bak
+Application/app_arm_action.h.bak
+
+# Web 控制台: 「OLED」Tab 写回前自动备份 —— 菜单表 + 汉字字表各一份
+# ⚠️ glyphs.txt 的 .bak 也在这里: 补字是**追加**写入, 失败回滚要靠它
+Application/app_oled_menu.c.bak
+tools/fontgen/glyphs.txt.bak
+
+# Web 控制台: 「蓝牙」Tab 记住上次用的串口 —— 是本机私有的 (COM7/COM8 各机不同),
+# 与团队共用的 phrases.json / tuning.json 不同, 不该入库
+tools/webconsole/bt.json
+
+# Web 控制台: 「采集」Tab 记住上次用的摄像头/类别/间隔 —— 摄像头索引同样是各机不同
+# (笔记本内置一般 0、USB 一般 1), 不该入库
+tools/webconsole/cap.json
+
+# ⚠️ tools/webconsole/arm_trash.json（机械臂动作的回收站）**故意不入库之外**——
+#    它跟 phrases.json 同侧: 被删的动作是**项目内容**, 队友拉下来也该在回收站里。
+#    所以这里**不要**加它。各机私有的只有 bt.json / cap.json 那种硬件标识。
+.road_lab
+.pi_work/log_analysis/*
+_roadyaw_dbg/*
+.pi_work/qr_live/*
+
+# 手术备份（map.c.bak-<主题> / uvprojx.bak-adc 这类）只留本机, 不入库
+*.bak-*
+
+# agent 工具（ZCode / Claude Code）的本地会话状态
+.claude/
+.zcode/

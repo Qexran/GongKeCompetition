@@ -1,0 +1,55 @@
+{
+  "next_id": 116,
+  "groups": [],
+  "switches": [
+    {
+      "id": 108,
+      "name": "SW_COLOR_TASK_REVERSE",
+      "display": "色球反向",
+      "group": "反向",
+      "note": ""
+    },
+    {
+      "id": 109,
+      "name": "SW_TARGET_TASK_REVERSE",
+      "display": "标靶反向",
+      "group": "反向",
+      "note": ""
+    },
+    {
+      "id": 110,
+      "name": "SW_HOSTAGE_REVERSE",
+      "display": "人质反向",
+      "group": "反向",
+      "note": ""
+    },
+    {
+      "id": 111,
+      "name": "SW_DISABLED_LEFT_ROAD",
+      "display": "左边封路",
+      "group": "封路",
+      "note": ""
+    },
+    {
+      "id": 113,
+      "name": "SW_REVERSE_COLOR_AND_HOSTAGE",
+      "display": "色球与人质交换",
+      "group": "倒序走",
+      "note": ""
+    },
+    {
+      "id": 114,
+      "name": "SW_REVERSE",
+      "display": "二维码板与人质台交换",
+      "group": "倒序走",
+      "note": ""
+    },
+    {
+      "id": 115,
+      "name": "SW_SWAP_HOS_AND_BALL_FUNCTION",
+      "display": "人质放置到爆爆桶+抓取色球",
+      "group": "特殊",
+      "note": ""
+    }
+  ]
+}

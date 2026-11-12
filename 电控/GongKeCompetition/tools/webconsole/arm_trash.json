@@ -1,0 +1,310 @@
+{
+  "items": [
+    {
+      "trash_id": "t6",
+      "id": 39,
+      "title": "放",
+      "note": "",
+      "nowait": false,
+      "deleted_at": "2026-11-06 05:16",
+      "items": [
+        {
+          "id": "i0",
+          "kind": "pose",
+          "tag": "识别人质",
+          "angles": [
+            168.0,
+            12.0,
+            83.0,
+            90.0,
+            279.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 1,
+            "degree": 72
+          },
+          "disabled": true,
+          "edited": true
+        },
+        {
+          "id": "i2",
+          "kind": "pose",
+          "tag": "切换准备识别人质",
+          "angles": [
+            122.0,
+            24.0,
+            83.0,
+            90.0,
+            280.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 1,
+            "degree": 72
+          },
+          "disabled": false,
+          "edited": true
+        },
+        {
+          "id": "i4",
+          "kind": "pose",
+          "tag": "从上往下",
+          "angles": [
+            67.0,
+            31.6,
+            29.0,
+            90.0,
+            283.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 1,
+            "degree": 72
+          },
+          "disabled": false,
+          "edited": true
+        },
+        {
+          "id": "i6",
+          "kind": "pose",
+          "tag": "抓",
+          "angles": [
+            67.0,
+            31.6,
+            29.0,
+            90.0,
+            283.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 0,
+            "degree": 68
+          },
+          "disabled": false,
+          "edited": true
+        },
+        {
+          "id": "i8",
+          "kind": "pose",
+          "tag": "从下往上",
+          "angles": [
+            94.0,
+            56.0,
+            41.0,
+            90.0,
+            281.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 1,
+            "degree": 34
+          },
+          "disabled": false,
+          "edited": true
+        }
+      ]
+    },
+    {
+      "trash_id": "t5",
+      "id": 25,
+      "title": "从斜视二维码回收到待命状态",
+      "note": "台架上录的样例: 验证大积木链路",
+      "nowait": true,
+      "deleted_at": "2026-09-27 01:13",
+      "items": [
+        {
+          "id": "i0",
+          "kind": "pose",
+          "tag": "旋转到待命位置",
+          "angles": [
+            94.0,
+            46.0,
+            66.0,
+            90.0,
+            280.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 1,
+            "degree": 62
+          },
+          "disabled": false,
+          "edited": true
+        }
+      ]
+    },
+    {
+      "trash_id": "t4",
+      "id": 24,
+      "title": "臂组动作",
+      "note": "台架上录的样例: 验证大积木链路",
+      "nowait": true,
+      "deleted_at": "2026-09-27 01:12",
+      "items": [
+        {
+          "id": "i0",
+          "kind": "pose",
+          "tag": "位姿1",
+          "angles": [
+            88.0,
+            14.0,
+            11.0,
+            90.0,
+            10.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 1,
+            "degree": 100
+          },
+          "disabled": false,
+          "edited": true
+        },
+        {
+          "id": "i2",
+          "kind": "pose",
+          "tag": "位姿2",
+          "angles": [
+            88.0,
+            14.0,
+            11.0,
+            90.0,
+            10.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 1,
+            "degree": 100
+          },
+          "disabled": false,
+          "edited": true
+        }
+      ]
+    },
+    {
+      "trash_id": "t3",
+      "id": 21,
+      "title": "机械臂待命到正视二维码模式",
+      "note": "台架上录的样例: 验证大积木链路",
+      "nowait": false,
+      "deleted_at": "2026-09-26 10:07",
+      "items": [
+        {
+          "id": "i0",
+          "kind": "pose",
+          "tag": "从初始位置伸出",
+          "angles": [
+            88.0,
+            14.0,
+            11.0,
+            90.0,
+            12.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 0,
+            "degree": 67
+          },
+          "disabled": false,
+          "edited": true
+        },
+        {
+          "id": "i2",
+          "kind": "pose",
+          "tag": "伸展机械臂",
+          "angles": [
+            88.0,
+            37.0,
+            11.0,
+            90.0,
+            12.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 0,
+            "degree": 67
+          },
+          "disabled": false,
+          "edited": true
+        },
+        {
+          "id": "i4",
+          "kind": "pose",
+          "tag": "位姿4",
+          "angles": [
+            88.0,
+            53.0,
+            48.0,
+            90.0,
+            7.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 0,
+            "degree": 67
+          },
+          "disabled": false,
+          "edited": true
+        }
+      ]
+    },
+    {
+      "trash_id": "t2",
+      "id": 20,
+      "title": "机械臂待命到二维码模式恢复",
+      "note": "",
+      "nowait": false,
+      "deleted_at": "2026-09-25 05:50",
+      "items": [
+        {
+          "id": "i0",
+          "kind": "pose",
+          "tag": "位姿2",
+          "angles": [
+            64.0,
+            46.0,
+            110.0,
+            90.0,
+            47.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 0,
+            "degree": 67
+          },
+          "disabled": false,
+          "edited": true
+        }
+      ]
+    },
+    {
+      "trash_id": "t1",
+      "id": 2,
+      "title": "drdongzuo",
+      "note": "",
+      "nowait": false,
+      "deleted_at": "2026-09-14 23:10",
+      "items": [
+        {
+          "id": "i0",
+          "kind": "pose",
+          "tag": "位姿1",
+          "angles": [
+            90.0,
+            90.0,
+            90.0,
+            90.0,
+            180.0
+          ],
+          "gripper": {
+            "enabled": true,
+            "kai_he": 0,
+            "degree": 100
+          },
+          "edited": true
+        }
+      ]
+    }
+  ]
+}
