@@ -1,0 +1,26 @@
+标注/验证平台: http://127.0.0.1:8765
+ * Serving Flask app 'server'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:8765
+Press CTRL+C to quit
+127.0.0.1 - - [28/Sep/2026 01:59:56] "GET /api/tasks HTTP/1.1" 200 -
+127.0.0.1 - - [28/Sep/2026 01:59:56] "GET /api/videos HTTP/1.1" 200 -
+127.0.0.1 - - [28/Sep/2026 01:59:56] "POST /api/tasks HTTP/1.1" 200 -
+127.0.0.1 - - [28/Sep/2026 01:59:56] "GET /api/tasks HTTP/1.1" 200 -
+127.0.0.1 - - [28/Sep/2026 01:59:56] "DELETE /api/task/_del_test HTTP/1.1" 200 -
+127.0.0.1 - - [28/Sep/2026 01:59:56] "GET /api/tasks HTTP/1.1" 200 -
+127.0.0.1 - - [28/Sep/2026 01:59:56] "DELETE /api/task/..\\evil HTTP/1.1" 400 -
+127.0.0.1 - - [28/Sep/2026 02:00:29] "GET / HTTP/1.1" 200 -
+127.0.0.1 - - [28/Sep/2026 02:00:29] "GET /static/icons/prev.png HTTP/1.1" 304 -
+127.0.0.1 - - [28/Sep/2026 02:00:29] "GET /static/icons/next.png HTTP/1.1" 304 -
+127.0.0.1 - - [28/Sep/2026 02:00:29] "GET /static/icons/edit.png HTTP/1.1" 304 -
+127.0.0.1 - - [28/Sep/2026 02:00:29] "GET /static/icons/save.png HTTP/1.1" 304 -
+127.0.0.1 - - [28/Sep/2026 02:00:29] "GET /static/icons/new.png HTTP/1.1" 304 -
+127.0.0.1 - - [28/Sep/2026 02:00:29] "GET /static/icons/open.png HTTP/1.1" 304 -
+127.0.0.1 - - [28/Sep/2026 02:00:29] "GET /api/tasks HTTP/1.1" 200 -
+127.0.0.1 - - [28/Sep/2026 02:00:38] "GET /api/videos HTTP/1.1" 200 -
+127.0.0.1 - - [28/Sep/2026 02:00:50] "GET /api/videos HTTP/1.1" 200 -
+127.0.0.1 - - [28/Sep/2026 02:00:57] "POST /api/tasks HTTP/1.1" 400 -
+127.0.0.1 - - [28/Sep/2026 02:05:19] "GET /api/tasks HTTP/1.1" 200 -
+127.0.0.1 - - [28/Sep/2026 02:05:52] "GET /api/tasks HTTP/1.1" 200 -

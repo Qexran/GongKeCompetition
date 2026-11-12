@@ -1,0 +1,16 @@
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on http://127.0.0.1:8765
+Press CTRL+C to quit
+127.0.0.1 - - [06/Oct/2026 09:03:19] "POST /api/reload_algo HTTP/1.1" 200 -
+127.0.0.1 - - [06/Oct/2026 09:03:23] "POST /api/task/A/compare HTTP/1.1" 200 -
+127.0.0.1 - - [06/Oct/2026 09:03:29] "POST /api/task/B/compare HTTP/1.1" 200 -
+127.0.0.1 - - [06/Oct/2026 09:03:29] "POST /api/task/C/compare HTTP/1.1" 200 -
+127.0.0.1 - - [06/Oct/2026 09:03:31] "POST /api/task/D/compare HTTP/1.1" 200 -
+127.0.0.1 - - [06/Oct/2026 09:03:36] "POST /api/task/E/compare HTTP/1.1" 200 -
+127.0.0.1 - - [06/Oct/2026 09:03:40] "POST /api/task/I/compare HTTP/1.1" 200 -
+127.0.0.1 - - [06/Oct/2026 09:03:46] "POST /api/task/J/compare HTTP/1.1" 200 -
+127.0.0.1 - - [06/Oct/2026 09:03:48] "POST /api/task/K/compare HTTP/1.1" 200 -
+127.0.0.1 - - [06/Oct/2026 09:03:53] "POST /api/task/P/compare HTTP/1.1" 200 -
+127.0.0.1 - - [06/Oct/2026 09:03:57] "POST /api/task/T/compare HTTP/1.1" 200 -
+127.0.0.1 - - [06/Oct/2026 09:04:03] "POST /api/task/U/compare HTTP/1.1" 200 -
+127.0.0.1 - - [06/Oct/2026 09:04:08] "POST /api/task/V/compare HTTP/1.1" 200 -

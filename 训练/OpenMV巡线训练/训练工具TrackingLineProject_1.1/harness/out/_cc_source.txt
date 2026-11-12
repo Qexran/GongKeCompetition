@@ -1,0 +1,151 @@
+ 818 def column_crossing(prof, margin):
+ 819     """单列完整裁决（2026-09-29 第十一次抽成纯函数）—— 主循环/回放器/平台三方调用
+ 820     同一份：此前 Replay.step 手工复刻第 3 步，第八/十次机制漏同步，离线结论不再代表
+ 821     相机（RECOVERY_NOTE.md 根因4）。步骤 = 亮度掩码 → 亮条参考色 → f 距离剖面
+ 822     （smooth3）→ cross_row → refine_local → 穿越合法域闸。
+ 823     prof: col_profile 剖面 [(行中心, a, b, L), ...]；margin: 全局两侧色心距（落差闸
+ 824     的满程下限）。返回 (row, ta, tb, ba, bb)：
+ 825       整体 None      亮条凑不齐 = 整列在补光死角里，不采；
+ 826       row=None       该列无合法穿越（参考色照常返回，供全局中位数覆盖用）。
+ 827     亮度掩码（第八次）：补光死角 L 塌向 0 时 |a|,|b| 一起塌 —— 黑条会染黑参考色、
+ 828     黑↔亮过渡会造假穿越。判暗 = L < max(L_DARK_ABS, DARK_FRAC×近端亮度)；从窗口顶
+ 829     连下来的暗条串（dead）里的穿越一律不认。顶参考 = 从上往下前 2 条亮条（整列搜，
+ 830     3→2 给贴黑区下缘的薄亮带真交界留空间；黑区深达 ~100 行时死写窗口会一列全丢）。
+ 831     底参考 = 从最底亮条向上**区域生长**（第十一次）：与最底那条比 (a,b) 色距
+ 832     ≤ REF_GROW_STEP 才收、超距即停 —— 渐变沿程漂移，锚死最底亮条参考带才贴得住实色。
+ 833     合法域闸（第十次立、第十一次改）：
+ 834       A = 穿越必须落在顶参考带之下（row ≥ top_lim；带内 = 上下是同一条渐变）。
+ 835           ⚠️ 旧 bot_lim（穿越不得低于底参考带）已删 —— 任务F 22-24/31-34 帧"贴底
+ 836           交界"被它连真带假全杀；带内防假改由底参考生长保住。
+ 837       B = 带间 f 不得回翻错侧超满程 15%（真两面在穿越两侧饱和，渐变一路漂移必回翻）。"""
+ 838     n = len(prof)
+ 839     l_near = (prof[-1][3] + prof[-2][3] + prof[-3][3]) / 3.0
+ 840     thr = max(L_DARK_ABS, DARK_FRAC * l_near)
+ 841     dark = [p[3] < thr for p in prof]
+ 842     ndead = 0                           # 从窗口顶连下来的暗条数（黑区本体）
+ 843     for dd in dark:
+ 844         if not dd:
+ 845             break
+ 846         ndead += 1
+ 847     dead = [j < ndead for j in range(n)]
+ 848     tj = [j for j in range(n) if not dark[j]][:2]
+ 849     bj = []
+ 850     for j in range(n - 1, n - 9, -1):   # 底部 9 条窗口（与旧版同）
+ 851         if len(bj) >= 3:
+ 852             break
+ 853         if dark[j]:
+ 854             continue
+ 855         if not bj:
+ 856             bj.append(j)                # 锚 = 最底亮条
+ 857             continue
+ 858         if ((prof[j][1] - prof[bj[0]][1]) ** 2
+ 859                 + (prof[j][2] - prof[bj[0]][2]) ** 2) > REF_GROW_STEP * REF_GROW_STEP:
+ 860             break                       # 渐变漂出锚条色距 → 生长到头
+ 861         bj.append(j)
+ 862     if len(tj) < 2 or len(bj) < 2:
+ 863         return None
+ 864     ta = sum(prof[j][1] for j in tj) / len(tj)
+ 865     tb = sum(prof[j][2] for j in tj) / len(tj)
+ 866     ba = sum(prof[j][1] for j in bj) / len(bj)
+ 867     bb = sum(prof[j][2] for j in bj) / len(bj)
+ 868     da, db = ba - ta, bb - tb
+ 869     d2 = da * da + db * db              # 该列两侧参考色距离² ≈ f 满程的一半
+ 870     f = [((p[1] - ta) ** 2 + (p[2] - tb) ** 2)
+ 871          - ((p[1] - ba) ** 2 + (p[2] - bb) ** 2) for p in prof]
+ 872     fs = smooth3(f)                     # 浅色差：先平滑再找过零（见 smooth3）
+ 873     # 落差闸满程估计 = max(2×该列参考距², margin²)：margin² 是绝对下限，整列都在
+ 874     # 一侧时 d2 会很小，不能被噪声糊过去；只当保守一半用（真实满程 ≥ 2×margin²），
+ 875     # 直接当满程会把 LED 热点列（参考距偏小）的好点误杀（uuu.bmp 实测差 8%）
+ 876     row = cross_row([(prof[j][0], fs[j]) for j in range(n)], 0.0,
+ 877                     CROSS_MIN_SWING_FRAC * max(2.0 * d2, margin * margin), dead)
+ 878     # 第二遍：局部参考色细化（见 refine_local）。粗定位失败（阴影边假点）的列不救；
+ 879     # 这里只修"真交界上的过零点被参考色横漂带拱"。第十三次起**迭代收敛**：局部
+ 880     # 参考的照度差随迭代减半、偏差几何收敛，3 次即到不动点（见 REFINE_ITERS 注释）
+ 881     # —— 单次细化会把过零留在列内照度梯度的中点（暗列尤其狠：补光中心散开，
+ 882     # 边缘列的暗路面"看起来像顶参考"，过零被往下推几十 px）。
+ 883     for _ in range(REFINE_ITERS):
+ 884         if row is None:
+ 885             break
+ 886         r2 = refine_local(prof, row, dark, dead)
+ 887         if r2 is None or abs(r2 - row) < 1.0:
+ 888             if r2 is not None:
+ 889                 row = r2
+ 890             break
+ 891         row = r2
+ 892     if row is not None:
+ 893         top_lim = WIN_Y[0] + (tj[-1] + 1) * STRIP
+ 894         bad = row < top_lim             # 闸A：穿越不得落进顶参考带（只留顶侧）
+ 895         if not bad:
+ 896             eps = 0.3 * d2              # 满程 2·d2 的 15%
+ 897             for j in range(tj[-1] + 1, min(bj)):
+ 898                 if dead[j] or abs(prof[j][0] - row) < 0.75 * STRIP:
+ 899                     continue            # 黑区条不判；穿越 ±1 条是过渡带不判
+ 900                 if ((prof[j][0] < row and fs[j] > eps)
+ 901                         or (prof[j][0] > row and fs[j] < -eps)):
+ 902                     bad = True          # 闸B：带间回翻错侧 → 渐变假穿越
+ 903                     break
+ 904         if bad:
+ 905             row = None
+ 906     # ---- 渐变重锚定 + 边缘强度门（第十六次，2026-10-01）----
+ 907     # 背景（新场地视频任务U/V/T/P 全标注闭环实测，评分 harness/score_local.py）：
+ 908     #   ① 黄区远离补光时两面 a/b 色差塌到 ~6.5-9 → 旧 MARGIN_MIN=10 整段拒真
+ 909     #     （V/T 全盲 0/245、0/198）；
+ 910     #   ② 交界埋在长亮度/色度渐变里时，f 的过零点 = 渐变中点，系统性偏高真边
+ 911     #     30~60px（V#2 col63 实测：f 过零在行 119、f 的最大台阶 325→639 在真值
+ 912     #     152 处）；refine_local 的局部参考在局部线性段上的不动点也在坡中，救不回；
+ 913     #   ③ U#83-90 型假丢线同根：接缝 2~3 条厚，各列过零在缝内的位置不一致 →
+ 914     #     拟合散掉 → 假丢线还被 Δ 误标方向。
+ 915     # 治法 = 色度台阶剖面 stepv[j] = ‖Δ(a,b)‖（相邻横条）：
+ 916     #   ① 零点已踩在台阶 ≥EDGE_STEP_SHARP 的实体边上 → 一切照旧（A~K 锐边场地
+ 917     #     零改动，这是回归不退的根基）；
+ 918     #   ② 否则在合法域（顶参考带之下 ~ 底参考带之上）找"方向对齐"的最大台阶
+ 919     #     重锚定（抛物线取亚条精度）：真边界必从上表面色走向下表面色，即
+ 920     #     Δ(a,b) 与 (下参考−上参考) 点积 > 0 —— LED 热点在单材料内的回卷台阶
+ 921     #     （b 先降后升）方向相反，被此门挡掉（V#1 col63 实测：热点台阶 8.0 反向、
+ 922     #     真边 6.2 正向，不加方向门 argmax 会锁到热点）；
+ 923     #   ③ 合法域内没有对齐实体边 → 整列不采。这一刀同时是 MARGIN_MIN 降到 5 的
+ 924     #     安全阀：单材料帧（全路/全黄）纵有光照渐变、没有材料边，8 列全灭 →
+ 925     #     不会因 margin 门槛放低而假有效。
+ 926     #   被闸 A/B 杀掉零点的列也走 ②③（救援：V#1 col118/228 零点被杀、真边台阶
+ 927     #   11~14 全场最强，不救援就少两列点）。
+ 928     sa = [p[1] for p in prof]
+ 929     sb = [p[2] for p in prof]
+ 930     # ⚠️ MicroPython 的 math 没有 hypot —— 2026-10-02 现场翻车点：v3.1 用了它，
+ 931     #    逐列一进来就 AttributeError → 每帧 21.5ms 快速吐 L,0,0,0,4（46fps 全 0 盲），
+ 932     #    而错误信息走 print() 脱机不可见。CPython 语法检查查不出缺属性，离线改动
+ 933     #    上真机前注意避开非 MicroPython 函数（hypot/dist/isfinite/fsum 等）。
+ 934     stepv = [math.sqrt((sa[j + 1] - sa[j]) ** 2 + (sb[j + 1] - sb[j]) ** 2)
+ 935              for j in range(n - 1)]
+ 936     j_lo = tj[-1]                       # 合法域下端 = 顶参考带之下（与闸A 同源）
+ 937     j_hi = min(bj[0], n - 2) - 1        # 合法域上端 = 底参考最上条之上
+ 938     if j_hi < j_lo or d2 < 1e-6:
+ 939         return None                     # 退化（参考带重叠/参考重合）：整列不采
+ 940     nvec = math.sqrt(d2)
+ 941     va, vb = (ba - ta) / nvec, (bb - tb) / nvec     # 上参考 → 下参考 的方向
+ 942     if row is not None:
+ 943         k = max(0, min(n - 2, int((row - (WIN_Y[0] + STRIP / 2.0)) / STRIP)))
+ 944         locs = [stepv[j] for j in (k - 1, k, k + 1) if j_lo <= j <= j_hi]
+ 945         if locs and max(locs) >= EDGE_STEP_SHARP:
+ 946             return (row, ta, tb, ba, bb)    # 零点已踩在实体边上，行为与旧版一致
+ 947     best_j, best_v = None, EDGE_STEP_SHARP  # （row=None 的列也走到这里 = 救援搜索）
+ 948     for j in range(j_lo, j_hi + 1):
+ 949         if dead[j] or dead[j + 1] or stepv[j] <= best_v:
+ 950             continue
+ 951         if (sa[j + 1] - sa[j]) * va + (sb[j + 1] - sb[j]) * vb <= 0.0:
+ 952             continue                    # 方向对齐门：反向台阶（热点回卷）不是边界
+ 953         best_v, best_j = stepv[j], j
+ 954     if best_j is None:
+ 955         return None                     # 合法域内无对齐实体边 = 单材料渐变列 → 不采
+ 956     r2 = (prof[best_j][0] + prof[best_j + 1][0]) / 2.0
+ 957     if 0 < best_j < n - 2:
+ 958         lft, ctr, rgt = stepv[best_j - 1], stepv[best_j], stepv[best_j + 1]
+ 959         den = lft - 2.0 * ctr + rgt
+ 960         if den < -1e-6:
+ 961             offq = 0.5 * (lft - rgt) / den
+ 962             if -1.0 <= offq <= 1.0:
+ 963                 r2 += offq * STRIP / 2.0        # 抛物线亚条内插
+ 964     if r2 < WIN_Y[0] + (tj[-1] + 1) * STRIP:
+ 965         return None                     # 闸A 复查（重锚定点不得落进顶参考带）
+ 966     return (r2, ta, tb, ba, bb)
+ 967 
+ 968 

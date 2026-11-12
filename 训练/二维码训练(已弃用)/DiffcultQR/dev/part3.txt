@@ -1,0 +1,67 @@
+
+# ---------- D: decoding ----------
+
+import qrdecode as q
+from reedsolo import RSCodec, ReedSolomonError
+
+
+def bit_positions():
+    fm = q.function_map(N)
+    bits = []
+    col = N - 1
+    up = True
+    while col > 0:
+        if col == 6:
+            col -= 1
+        c1, c0 = col, col - 1
+        rows = range(N - 1, -1, -1) if up else range(N)
+        for r in rows:
+            for c in (c1, c0):
+                if not fm[r, c]:
+                    bits.append((r, c))
+        up = not up
+        col -= 2
+    return bits
+
+BITS = bit_positions()
+
+
+def dih(x):
+    return [np.rot90(x, k) for k in range(4)] + [np.fliplr(np.rot90(x, k)) for k in range(4)]
+
+
+def dih_pairs(x, m):
+    return ([(np.rot90(x, k), np.rot90(m, k)) for k in range(4)] +
+            [(np.fliplr(np.rot90(x, k)), np.fliplr(np.rot90(m, k))) for k in range(4)])
+
+
+def codewords_of(base, mi):
+    fm = q.function_map(N)
+    mf = q.mask_funcs()[mi]
+    un = base.copy()
+    for r in range(N):
+        for c in range(N):
+            if not fm[r, c] and mf(r, c):
+                un[r, c] ^= 1
+    return np.array(q.bits_to_codewords(q.extract_bits(un, N)))
+
+
+def try_rs_decode(mat):
+    for ori, base in enumerate(dih(mat)):
+        for ecc_name, info in q.ECC_INFO.items():
+            nsym = info['total'] - info['data']
+            for mi in range(8):
+                ucw = codewords_of(base, mi)
+                try:
+                    dec, full, errata = RSCodec(nsym).decode(bytes(ucw))
+                except Exception:
+                    continue
+                if all(v == 0 for v in dec):
+                    continue
+                try:
+                    t = q.parse_payload(list(dec))
+                except Exception:
+                    continue
+                if t and not t.startswith('<mode'):
+                    return (t, ori, ecc_name, mi, len(errata))
+    return None

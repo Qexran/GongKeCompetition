@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>巡线标注/验证平台</title>
+<style>
+:root{--bg:#15171c;--pan:#1e2129;--lin:#2c303b;--tx:#d7dae2;--dim:#8b91a0;--acc:#4f8cff;--ok:#3fbf6f;--warn:#e0a13c;--bad:#e05c5c}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);font:14px/1.5 "Microsoft YaHei",sans-serif;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+header{display:flex;gap:24px;align-items:center;padding:10px 16px;background:var(--pan);border-bottom:1px solid var(--lin)}
+header h1{font-size:16px;font-weight:600}
+header .tabs{display:flex;gap:4px}
+header .tabs button{background:none;border:none;color:var(--dim);padding:6px 14px;border-radius:6px;cursor:pointer;font-size:14px}
+header .tabs button.on{background:var(--acc);color:#fff}
+#layout{flex:1;display:flex;min-height:0}
+main{flex:1;overflow:hidden;display:none}
+main.on{display:flex}
+button{background:var(--pan);border:1px solid var(--lin);color:var(--tx);border-radius:6px;padding:6px 12px;cursor:pointer}
+button:hover{border-color:var(--acc)}
+button.pri{background:var(--acc);border-color:var(--acc);color:#fff}
+.key{font-size:10px;color:var(--dim)}
+select,input[type=text],input[type=number]{background:var(--pan);border:1px solid var(--lin);color:var(--tx);border-radius:6px;padding:6px 8px}
+.dim{color:var(--dim);font-size:12px}
+/* ---- 左侧任务栏(标注/验证两页常驻; 比对页全宽) ---- */
+#sidebar{width:198px;flex:0 0 198px;background:var(--pan);border-right:1px solid var(--lin);display:flex;flex-direction:column;overflow-y:auto}
+body[data-tab="compare"] #sidebar{display:none}
+#sidebar .hd{padding:10px;border-bottom:1px solid var(--lin);font-weight:600}
+#sidebar .btns{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:10px;border-bottom:1px solid var(--lin)}
+#sidebar .btns button{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  padding:10px 4px;aspect-ratio:1/1;font-size:12px;border-radius:6px;text-align:center;line-height:1.25}
+#sidebar .btns button img{width:22px;height:22px;object-fit:contain}
+#sidebar .btns button:hover{border-color:var(--acc);background:#262a34}
+#sidebar .btns button .key{font-size:10px;color:var(--dim)}
+#taskList{flex:1;overflow:auto}
+#taskList .t{padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--lin);position:relative}
+#taskList .t:hover{background:#262a34}
+#taskList .t.on{background:var(--acc);color:#fff}
+#taskList .t.on .dim{color:#dfe8ff}
+#taskList .t .del{display:none;position:absolute;right:8px;top:6px;padding:0 6px;
+  font-size:12px;color:var(--bad);background:none;border:1px solid transparent}
+#taskList .t:hover .del{display:inline-block}
+#taskList .t .del:hover{border-color:var(--bad);background:var(--bad);color:#fff}
+#sideInfo{padding:10px;border-top:1px solid var(--lin)}
+/* ---- 标注页 ---- */
+#anno{flex-direction:row}
+#stage{flex:1;display:flex;flex-direction:column;min-width:0}
+#canvasWrap{flex:1;display:flex;align-items:center;justify-content:center;background:#0d0e12;position:relative;min-height:0;cursor:crosshair}
+#annoCanvas{background:#000;max-width:100%;max-height:100%}
+#toolbar{background:var(--pan);border-top:1px solid var(--lin);padding:8px 12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+#toolbar .grp{display:flex;gap:4px;align-items:center}
+.stbtn{min-width:72px}
+.stbtn.on{outline:2px solid var(--acc)}
+.stbtn[data-st="0"].on{background:#3a6a3a}.stbtn[data-st="1"].on{background:#6a5a2a}
+.stbtn[data-st="2"].on{background:#4a4f6a}.stbtn[data-st="3"].on{background:#7a6a2e}.stbtn[data-st="4"].on{background:#5a3a3a}
+/* 胶片条(标注页+验证页共用) */
+.film{height:86px;background:var(--pan);border-top:1px solid var(--lin);display:flex;overflow-x:auto;overflow-y:hidden}
+.film .cell{position:relative;flex:0 0 auto;margin:4px 3px;cursor:pointer;border:2px solid transparent}
+.film .cell img{height:70px;display:block}
+.film .cell.on{border-color:var(--acc)}
+.film .cell .dot{position:absolute;right:2px;top:2px;width:8px;height:8px;border-radius:50%}
+/* 划线后弹出的状态选择框 */
+#stPop{position:fixed;z-index:60;display:none;background:var(--pan);border:1px solid var(--acc);border-radius:8px;box-shadow:0 6px 24px #000a;padding:6px;flex-direction:column;gap:4px;min-width:150px}
+#stPop button{text-align:left;padding:7px 12px}
+#stPop button:hover{background:var(--acc);color:#fff}
+#stPop .sk{color:var(--dim);font-size:11px;float:right}
+/* ---- 验证页(实时浏览) ---- */
+#verify{flex-direction:column;padding:12px;gap:10px;overflow:hidden}
+.vrow{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+#playerWrap{flex:1;background:#0d0e12;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:8px;min-height:0}
+#vCanvasBox{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;width:100%}
+#playerCanvas{background:#000;max-width:100%;max-height:100%;object-fit:contain;image-rendering:pixelated}
+#vFilmWrap{width:100%;flex:0 0 auto}
+/* ---- 比对页 ---- */
+#compare{flex-direction:column;padding:16px;gap:12px;overflow:auto}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.cards{display:flex;gap:10px;flex-wrap:wrap}
+.card{background:var(--pan);border:1px solid var(--lin);border-radius:8px;padding:10px 14px;min-width:130px}
+.card .v{font-size:20px;font-weight:600}
+table{border-collapse:collapse;width:100%}
+th,td{border-bottom:1px solid var(--lin);padding:5px 8px;text-align:left;font-size:13px}
+th{color:var(--dim);font-weight:500}
+tr.bad td{color:var(--bad)}
+#dlg{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;align-items:center;justify-content:center;z-index:70}
+#dlg .box{background:var(--pan);border:1px solid var(--lin);border-radius:10px;padding:18px;width:420px;display:flex;flex-direction:column;gap:10px}
+#dlg label{display:flex;gap:8px;align-items:center;justify-content:space-between}
+</style>
+</head>
+<body data-tab="anno">
+<header>
+  <h1>巡线标注 / 验证平台</h1>
+  <div class="tabs">
+    <button id="tabAnno" class="on">标注</button>
+    <button id="tabVerify">验证</button>
+    <button id="tabCmp">比对</button>
+  </div>
+  <span class="dim" id="hint">A/D 或 ←→ 切帧 · 拖拽/两击画线(可从黑区起笔) · 画完弹状态框 · J 跳到未标 · Esc 取消</span>
+</header>
+
+<div id="layout">
+  <!-- ============ 左侧任务栏 ============ -->
+  <div id="sidebar">
+    <div class="hd">任务列表</div>
+    <div class="btns anno-only">
+      <button id="btnPrev"><img src="/static/icons/prev.png">上一帧<span class="key">A</span></button>
+      <button id="btnNext"><img src="/static/icons/next.png">下一帧<span class="key">D</span></button>
+      <button id="btnJump"><img src="/static/icons/edit.png">跳到未标<span class="key">J</span></button>
+      <button id="btnExport"><img src="/static/icons/save.png">导出标注</button>
+      <button id="btnNew2"><img src="/static/icons/new.png">新建任务</button>
+      <button id="btnOpen"><img src="/static/icons/open.png">打开任务</button>
+    </div>
+    <div id="taskList"></div>
+    <div id="sideInfo" class="dim">未打开任务</div>
+  </div>
+
+  <!-- ============ 标注 ============ -->
+  <main id="anno" class="on">
+    <div id="stage">
+      <div id="canvasWrap"><canvas id="annoCanvas" width="800" height="600"></canvas></div>
+      <div id="toolbar">
+        <span id="frameIdx" style="min-width:90px;text-align:center">0 / 0</span>
+        <div class="grp">
+          <button class="stbtn" data-st="0">0 直线</button>
+          <button class="stbtn" data-st="1">1 路口弧</button>
+          <button class="stbtn" data-st="2">2 压灰区</button>
+          <button class="stbtn" data-st="3">3 压黄区</button>
+          <button class="stbtn" data-st="4">4 不明</button>
+        </div>
+        <button id="btnClearLine">清除本帧线</button>
+        <span id="gtShow" class="dim">真值: 未画线</span>
+        <label class="dim"><input type="checkbox" id="autoAdv"> 标完自动下一帧</label>
+        <span id="prog" class="dim"></span>
+      </div>
+      <div id="film" class="film"></div>
+    </div>
+  </main>
+
+  <!-- ============ 验证(实时浏览) ============ -->
+  <main id="verify">
+    <div class="vrow">
+      <b>任务</b><select id="vTask"></select>
+      <button id="btnRefresh" title="重新载入 main.py 并从第 0 帧重放当前帧（改完算法不用重启服务）">⟳ 重跑算法<span class="key" style="margin-left:4px">R</span></button>
+      <button class="pri" id="btnRender">导出标注视频</button>
+      <span id="vInfo" class="dim"></span>
+      <a id="vDl" href="#" download style="display:none">下载 verif.mp4</a>
+    </div>
+    <div id="playerWrap">
+      <div id="vCanvasBox"><canvas id="playerCanvas" width="800" height="600"></canvas></div>
+      <div class="vrow">
+        <button id="btnPlay">▶ 播放</button>
+        <select id="vSpeed"><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select>
+        <input type="range" id="vScrub" min="0" max="0" value="0" style="flex:1;min-width:200px">
+        <span id="vFrame" class="dim">0/0</span>
+      </div>
+      <div class="dim">黄点=逐列交界点 · 绿线=拟合线 · 青线=人工真值 · 顶栏=预测|真值 —— 底部点任意原始帧即时查看该帧结果 · R/⟳ 重跑算法(重载 main.py 后从第 0 帧重放)</div>
+      <div id="vFilmWrap"><div id="vFilm" class="film"></div></div>
+    </div>
+  </main>
+
+  <!-- ============ 比对 ============ -->
+  <main id="compare">
+    <div class="row">
+      <b>任务</b><select id="cTask"></select>
+      <button class="pri" id="btnCmp">运行比对</button>
+      <span id="cInfo" class="dim"></span>
+    </div>
+    <div class="cards" id="cCards"></div>
+    <div id="cWorst">
+      <h3 style="margin:8px 0">offset 误差最大的帧（有真值线且预测有效的帧）</h3>
+      <table id="worstTbl"><thead><tr><th>帧</th><th>画面</th><th>预测 off/ang/st</th><th>真值 off/ang/st</th><th>误差</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div id="cStBad">
+      <h3 style="margin:8px 0">状态判错帧</h3>
+      <table id="stTbl"><thead><tr><th>帧</th><th>画面</th><th>预测 st</th><th>真值 st</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div id="cJit">
+      <h3 style="margin:8px 0">抖动最猛帧<span class="dim" style="font-weight:400"> — 按「残差逐帧台阶」排序（不是绝对误差；幅度小但高频的抖动只有这里看得见）</span></h3>
+      <table id="jitTbl"><thead><tr><th>帧</th><th>画面</th><th>轴</th><th>本帧台阶</th><th>预测→真值</th><th>残差</th></tr></thead><tbody></tbody></table>
+    </div>
+  </main>
+</div>
+
+<!-- 划线后的状态弹出框 -->
+<div id="stPop">
+  <button data-st="0">正常直线 <span class="sk">0</span></button>
+  <button data-st="1">路口弧 <span class="sk">1</span></button>
+  <button data-st="2">丢线·压灰区 <span class="sk">2</span></button>
+  <button data-st="3">丢线·压黄区 <span class="sk">3</span></button>
+  <button data-st="4">丢线·不明 <span class="sk">4</span></button>
+  <div style="height:1px;background:var(--lin);margin:2px 4px"></div>
+  <button data-st="keep">仅保存线(不改状态)</button>
+  <button data-st="cancel">取消本线 <span class="sk">Esc</span></button>
+</div>
+
+<!-- 新建任务对话框 -->
+<div id="dlg"><div class="box">
+  <b>新建标注任务</b>
+  <label>任务名 <input type="text" id="nName" placeholder="如 map1_push" style="flex:1"></label>
+  <label>来源视频 <select id="nVideo" style="flex:1"></select></label>
+  <label class="dim">或上传 <input type="file" id="nUpload" accept="video/*"></label>
+  <label>去重(30fps容器隔帧重复) <input type="checkbox" id="nDedup" checked></label>
+  <label>每 N 帧取 1（标注工作量 / 1=全部）<input type="number" id="nEvery" value="1" min="1" style="width:70px"></label>
+  <div class="row"><button class="pri" id="nGo">创建</button><button id="nCancel">取消</button><span id="nMsg" class="dim"></span></div>
+</div></div>
+
+<script>
+const $=id=>document.getElementById(id);
+const TABS={tabAnno:'anno',tabVerify:'verify',tabCmp:'compare'};
+for(const [btn,main] of Object.entries(TABS)){
+  $(btn).onclick=()=>{switchTab(main,btn);};
+}
+function switchTab(main,btn){
+  document.querySelectorAll('header .tabs button').forEach(b=>b.classList.remove('on'));
+  $(btn||Object.keys(TABS).find(k=>TABS[k]===main)).classList.add('on');
+  document.querySelectorAll('main').forEach(m=>m.classList.remove('on'));
+  $(main).classList.add('on');
+  document.body.dataset.tab=main;
+  if(main==='verify')onVerifyTab();
+  if(main==='compare')refreshTaskSelects();
+  saveUiState();
+}
+const api=(p,opt)=>fetch(p,opt).then(r=>r.json());
+/* ---------- 界面状态持久化(刷新回到上次任务/帧/页签) ---------- */
+function saveUiState(){try{localStorage.setItem('tlp_state',JSON.stringify(
+  {task:CUR,frame:FI,tab:document.body.dataset.tab}));}catch(e){}}
+function loadUiState(){try{return JSON.parse(localStorage.getItem('tlp_state'))||null;}catch(e){return null;}}
+/* ---------- 任务 ---------- */
+let TASKS=[],CUR=null;
+async function loadTasks(){
+  TASKS=await api('/api/tasks');
+  $('taskList').innerHTML='';
+  for(const t of TASKS){
+    const d=document.createElement('div');d.className='t'+(CUR===t.name?' on':'');
+    d.innerHTML=`<b>${t.name}</b><button class="del" title="删除任务">✕</button>`+
+      `<br><span class="dim">${t.n_frames}帧 · 线${t.n_line} 态${t.n_state}</span>`;
+    d.querySelector('.del').onclick=async ev=>{
+      ev.stopPropagation();
+      if(!confirm(`删除任务「${t.name}」？\n（切好的帧 + 标注 + 渲染缓存会一起删掉，不可恢复）`))return;
+      await fetch(`/api/task/${t.name}`,{method:'DELETE'});
+      if(CUR===t.name){CUR=null;META=null;ANN={frames:{}};PLAYER.t=null;
+        $('sideInfo').innerHTML='未打开任务';}
+      loadTasks();
+    };
+    d.onclick=()=>{CUR=t.name;
+      if(document.body.dataset.tab==='verify'){PLAYER.t=null;onVerifyTab();}
+      else openTask();
+      loadTasks();};
+    $('taskList').appendChild(d);
+  }
+  updateSideInfo();
+}
+function updateSideInfo(){
+  if(!CUR||!META){$('sideInfo').innerHTML='未打开任务';return;}
+  const n1=Object.values(ANN.frames).filter(v=>v.line).length;
+  const n2=Object.values(ANN.frames).filter(v=>v.state!==null&&v.state!==undefined).length;
+  $('sideInfo').innerHTML=`<b>${CUR}</b><br>${META.n_frames} 帧<br>线 ${n1} · 态 ${n2}`;
+}
+async function refreshTaskSelects(){
+  TASKS=await api('/api/tasks');
+  for(const sel of [$('vTask'),$('cTask')]){sel.innerHTML=TASKS.map(t=>`<option>${t.name}</option>`).join('');}
+}
+/* ---------- 新建任务 ---------- */
+async function openNewDialog(){
+  $('dlg').style.display='flex';
+  const vids=await api('/api/videos');
+  $('nVideo').innerHTML=vids.map(v=>`<option value="${v.path}">${v.name}</option>`).join('');
+}
+$('btnNew2').onclick=openNewDialog;
+$('btnOpen').onclick=()=>{const tl=$('taskList');tl.scrollIntoView({behavior:'smooth'});
+  tl.animate([{background:'#262a34'},{background:'transparent'}],{duration:800});};
+$('nCancel').onclick=()=>$('dlg').style.display='none';
+$('nUpload').onchange=async e=>{
+  const fd=new FormData();fd.append('file',e.target.files[0]);
+  const r=await api('/api/videos/upload',{method:'POST',body:fd});
+  if(r.ok){const vids=await api('/api/videos');
+    $('nVideo').innerHTML=vids.map(v=>`<option value="${v.path}" ${v.path===r.path?'selected':''}>${v.name}</option>`).join('');}
+};
+$('nGo').onclick=async()=>{
+  $('nMsg').textContent='切帧中…';
+  const r=await api('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({name:$('nName').value.trim(),video:$('nVideo').value,
+      dedup:$('nDedup').checked,every:+$('nEvery').value})});
+  $('nMsg').textContent=r.ok?`已创建 ${r.n_frames} 帧`:(r.error||'失败');
+  if(r.ok){CUR=$('nName').value.trim();openTask();loadTasks();setTimeout(()=>$('dlg').style.display='none',600);}
+};
+$('btnExport').onclick=async()=>{
+  if(!CUR)return;
+  const blob=await (await fetch(`/api/task/${CUR}/annotations`)).blob();
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+  a.download=CUR+'_annotations.json';a.click();
+};
+/* ---------- 标注画布 ---------- */
+const cv=$('annoCanvas'),cx=cv.getContext('2d'),wrap=$('canvasWrap'),pop=$('stPop');
+let META=null,ANN={frames:{}},FI=0,img=null,line1=null,dragging=false,downPt=null,dragMoved=false,rubber=null;
+function curA(){if(!ANN.frames[FI])ANN.frames[FI]={line:null,state:null,note:'',verified:false};return ANN.frames[FI];}
+async function openTask(frame){
+  META=await api(`/api/task/${CUR}/meta`);ANN=await api(`/api/task/${CUR}/annotations`);
+  FI=frame!=null?Math.max(0,Math.min(frame,META.n_frames-1)):0;
+  line1=null;rubber=null;buildFilm();await showFrame();saveUiState();
+}
+function loadImg(i){return new Promise(res=>{const im=new Image();
+  im.onload=()=>res(im);im.src=`/api/task/${CUR}/frame/${i}.jpg`;});}
+function toImg(e){ // 画布坐标→320x240 图像坐标; 允许黑区(界外±80)
+  const r=cv.getBoundingClientRect();
+  let x=(e.clientX-r.left)/r.width*320, y=(e.clientY-r.top)/r.height*240;
+  x=Math.max(-80,Math.min(400,x)); y=Math.max(-80,Math.min(320,y));
+  return [x,y];
+}
+function gtText(l){ // 与服务端同口径: TARGET_OFFSET=44(→目标行164), ERR_GAIN=200
+  const [x1,y1,x2,y2]=l;let m,row;
+  if(Math.abs(x2-x1)<1e-6){m=1e6;row=(y1+y2)/2;}else{m=(y2-y1)/(x2-x1);row=m*160+(y1-m*x1);}
+  const off=Math.max(-100,Math.min(100,Math.round((row-164)/240*200)));
+  const ang=Math.max(-900,Math.min(900,Math.round(Math.atan(m)*180/Math.PI*10)));
+  return `真值 off=${off>0?'+':''}${off} ang=${(ang/10).toFixed(1)}`;
+}
+function render(){
+  cx.fillStyle='#000';cx.fillRect(0,0,cv.width,cv.height);
+  if(img)cx.drawImage(img,0,0,320*2.5,240*2.5);
+  const a=ANN.frames[FI]||{};
+  const S=2.5;
+  if(a.line){cx.strokeStyle='#00ffff';cx.lineWidth=2;cx.beginPath();
+    cx.moveTo(a.line[0]*S,a.line[1]*S);cx.lineTo(a.line[2]*S,a.line[3]*S);cx.stroke();
+    cx.fillStyle='#00ffff';cx.font='13px sans-serif';cx.fillText(gtText(a.line),8,20);}
+  const p1=line1||downPt;
+  if(p1){cx.fillStyle='#00ffff';cx.beginPath();cx.arc(p1[0]*S,p1[1]*S,4,0,7);cx.fill();}
+  if(p1&&rubber){cx.strokeStyle='#ffffff88';cx.lineWidth=1;cx.beginPath();
+    cx.moveTo(p1[0]*S,p1[1]*S);cx.lineTo(rubber[0]*S,rubber[1]*S);cx.stroke();
+    cx.fillStyle='#fff';cx.font='12px sans-serif';cx.fillText(gtText([p1[0],p1[1],rubber[0],rubber[1]]),8,38);}
+  document.querySelectorAll('.stbtn').forEach(b=>b.classList.toggle('on',+b.dataset.st===a.state));
+  $('frameIdx').textContent=`${FI} / ${META?META.n_frames-1:0}`;
+  $('gtShow').textContent=a.line?('真值: '+gtText(a.line)):'真值: 未画线';
+  document.querySelectorAll('#film .cell').forEach((c,k)=>c.classList.toggle('on',k===FI));
+  const on=document.querySelector('#film .cell.on');if(on)on.scrollIntoView({inline:'center',block:'nearest'});
+  updateSideInfo();refreshDots();
+}
+async function showFrame(){img=await loadImg(FI);render();saveUiState();}
+function save(){if(!CUR)return;const a=ANN.frames[FI]||{};
+  api(`/api/task/${CUR}/annotations/${FI}`,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(a)});}
+/* --- 画线: 拖拽 或 两次点击; 起笔可在黑区 --- */
+wrap.addEventListener('mousedown',e=>{
+  if(!META||pop.style.display==='flex')return;
+  downPt=toImg(e);dragging=true;dragMoved=false;render();
+});
+wrap.addEventListener('mousemove',e=>{
+  if(!META)return;
+  rubber=toImg(e);
+  if(dragging&&downPt&&Math.hypot(rubber[0]-downPt[0],rubber[1]-downPt[1])>3)dragMoved=true;
+  if(line1||dragging)render();
+});
+window.addEventListener('mouseup',e=>{
+  if(!dragging||!META)return;dragging=false;
+  if(e.target.closest('#stPop,#sidebar,#toolbar,#film,header'))return;
+  const p=toImg(e);
+  if(dragMoved){finishLine([downPt,p],e);downPt=null;rubber=null;}
+  else{
+    if(line1==null){line1=downPt;}
+    else{const l=[line1,p];line1=null;finishLine(l,e);}
+    downPt=null;
+  }
+  render();
+});
+function finishLine(l,e){
+  const L=[l[0][0],l[0][1],l[1][0],l[1][1]];
+  if(Math.hypot(L[2]-L[0],L[3]-L[1])<4){line1=null;downPt=null;render();return;}
+  const prev=(ANN.frames[FI]||{}).line||null;
+  curA().line=L;save();render();
+  showPop(e.clientX,e.clientY,prev);
+}
+function showPop(px,py,prevLine){
+  pop.style.display='flex';
+  pop.dataset.prev=prevLine?JSON.stringify(prevLine):'';
+  pop.style.left=Math.min(window.innerWidth-170,px+14)+'px';
+  pop.style.top=Math.min(window.innerHeight-260,py+10)+'px';
+}
+function hidePop(){pop.style.display='none';}
+pop.querySelectorAll('button').forEach(b=>b.onclick=ev=>{
+  ev.stopPropagation();
+  const v=b.dataset.st;
+  if(v==='cancel'){curA().line=pop.dataset.prev?JSON.parse(pop.dataset.prev):null;save();}
+  else if(v!=='keep'){curA().state=+v;save();}
+  hidePop();render();autoNext();
+});
+document.addEventListener('click',e=>{if(pop.style.display==='flex'&&!e.target.closest('#stPop'))hidePop();});
+/* --- 帧切换/状态 --- */
+function autoNext(){if(!$('autoAdv').checked)return;const a=ANN.frames[FI];
+  if(a&&a.line&&a.state!==null&&a.state!==undefined&&FI<META.n_frames-1){FI++;line1=null;showFrame();}}
+document.querySelectorAll('.stbtn').forEach(b=>b.onclick=()=>{curA().state=+b.dataset.st;save();render();autoNext();});
+$('btnClearLine').onclick=()=>{if(ANN.frames[FI]){ANN.frames[FI].line=null;save();render();}};
+function prevFrame(){if(META&&FI>0){FI--;line1=null;rubber=null;showFrame();}}
+function nextFrame(){if(META&&FI<META.n_frames-1){FI++;line1=null;rubber=null;showFrame();}}
+function jumpUnlabeled(){ // 跳到第一个"既无线也无状态"的帧(=上次标注停下的地方); 全标完→最后一帧
+  if(!META)return;
+  let idx=META.n_frames-1;
+  for(let i=0;i<META.n_frames;i++){const a=ANN.frames[i];
+    if(!(a&&(a.line||(a.state!==null&&a.state!==undefined)))){idx=i;break;}}
+  FI=idx;line1=null;rubber=null;showFrame();
+}
+/* 播放器帧操作(验证页): 供侧栏按钮 / A,D,J 在验证页共用 */
+function vSet(i){if(!PLAYER.n)return;
+  PLAYER.playing=false;clearTimeout(PLAYER.timer);$('btnPlay').textContent='▶ 播放';
+  PLAYER.i=Math.max(0,Math.min(i,PLAYER.n-1));loadVerif(PLAYER.i);}
+function vPrev(){if(PLAYER.n)vSet(PLAYER.i-1);}
+function vNext(){if(PLAYER.n)vSet(PLAYER.i+1);}
+function vJump(){if(!PLAYER.n)return;let idx=PLAYER.n-1;
+  for(let i=0;i<PLAYER.n;i++){const a=PLAYER.gt&&PLAYER.gt[i];
+    if(!(a&&(a.line||(a.state!==null&&a.state!==undefined)))){idx=i;break;}}
+  vSet(idx);}
+$('btnPrev').onclick=()=>document.body.dataset.tab==='verify'?vPrev():prevFrame();
+$('btnNext').onclick=()=>document.body.dataset.tab==='verify'?vNext():nextFrame();
+$('btnJump').onclick=()=>document.body.dataset.tab==='verify'?vJump():jumpUnlabeled();
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT')return;
+  const tab=document.body.dataset.tab;
+  if(tab==='verify'){ // 验证页: A/D/J 操作播放器, R 重跑当前帧
+    const k=e.key.toLowerCase();
+    if(k==='a'||e.key==='ArrowLeft'){vPrev();e.preventDefault();}
+    else if(k==='d'||e.key==='ArrowRight'){vNext();e.preventDefault();}
+    else if(k==='j'){vJump();}
+    else if(k==='r'){refreshFrame();e.preventDefault();}
+    return;
+  }
+  if(!document.querySelector('#anno.on')||!META)return;
+  const k=e.key.toLowerCase();
+  if(k==='a'||e.key==='ArrowLeft'){prevFrame();e.preventDefault();}
+  else if(k==='d'||e.key==='ArrowRight'){nextFrame();e.preventDefault();}
+  else if(k==='j'){jumpUnlabeled();}
+  else if(e.key==='Escape'){line1=null;downPt=null;hidePop();render();}
+  else if('01234'.includes(e.key)&&pop.style.display!=='flex'){curA().state=+e.key;save();render();autoNext();}
+  else if('01234'.includes(e.key)&&pop.style.display==='flex'){
+    curA().state=+e.key;save();hidePop();render();autoNext();}
+});
+/* ---------- 标注页胶片 ---------- */
+function buildFilm(){
+  const f=$('film');f.innerHTML='';
+  for(let i=0;i<META.n_frames;i++){
+    const c=document.createElement('div');c.className='cell';
+    c.innerHTML=`<img loading="lazy" src="/api/task/${CUR}/frame/${i}.jpg"><div class="dot"></div>`;
+    c.onclick=()=>{FI=i;line1=null;rubber=null;showFrame();};
+    f.appendChild(c);
+  }
+}
+function refreshDots(){
+  document.querySelectorAll('#film .cell').forEach((c,i)=>{
+    const a=ANN.frames[i]||{};const d=c.querySelector('.dot');
+    if(a.line&&a.state!==null&&a.state!==undefined){d.style.background='var(--ok)';}
+    else if(a.line||(a.state!==null&&a.state!==undefined)){d.style.background='var(--warn)';}
+    else d.style.background='#555';
+  });
+}
+/* ---------- 验证页(点击即算: 先原始帧, 服务端算完换标注帧) ---------- */
+const PLAYER={t:null,n:0,i:0,gt:null,req:0,playing:false,timer:null};
+async function onVerifyTab(){
+  await refreshTaskSelects();
+  if(CUR&&TASKS.some(t=>t.name===CUR))$('vTask').value=CUR;   // 与侧栏选中任务保持一致
+  if(!$('vTask').value)return;
+  if(PLAYER.t!==$('vTask').value)await loadVerifyTask($('vTask').value);
+}
+async function loadVerifyTask(t){
+  PLAYER.t=t;PLAYER.req++;PLAYER.playing=false;clearTimeout(PLAYER.timer);
+  $('btnPlay').textContent='▶ 播放';
+  const meta=await api(`/api/task/${t}/meta`);
+  PLAYER.gt=(await api(`/api/task/${t}/annotations`)).frames;
+  PLAYER.n=meta.n_frames;
+  $('vScrub').max=meta.n_frames-1;
+  $('vDl').style.display='none';
+  buildVFilm(t,meta.n_frames);
+  loadVerif(0);
+}
+function drawPlayer(im){const p=$('playerCanvas').getContext('2d');p.drawImage(im,0,0,800,600);}
+function highlightVFilm(i){
+  document.querySelectorAll('#vFilm .cell').forEach((c,k)=>c.classList.toggle('on',k===i));
+  const on=document.querySelector('#vFilm .cell.on');if(on)on.scrollIntoView({inline:'center',block:'nearest'});
+}
+async function loadVerif(i,fresh){
+  if(!PLAYER.t||!PLAYER.n)return;
+  i=Math.max(0,Math.min(i,PLAYER.n-1));PLAYER.i=i;
+  $('vFrame').textContent=`${i}/${PLAYER.n-1}`;$('vScrub').value=i;
+  highlightVFilm(i);
+  const myReq=++PLAYER.req;
+  // ① 先立刻画原始帧
+  const orig=new Image();
+  orig.onload=()=>{if(myReq===PLAYER.req)drawPlayer(orig);};
+  orig.src=`/api/task/${PLAYER.t}/frame/${i}.jpg`;
+  // ② 请求该帧的算法结果, 算完替换(期间用户切了帧就丢弃这次结果)
+  //    fresh=1 → 服务端丢缓存、从第 0 帧重放(改完 main.py 后要看到新代码必须这样)
+  $('vInfo').textContent='计算中…';
+  fetch(`/api/task/${PLAYER.t}/frame_algo/${i}.jpg${fresh?'?fresh=1':''}`)
+    .then(r=>{if(!r.ok)throw 0;return r.blob();})
+    .then(b=>new Promise(res=>{const im=new Image();im.onload=()=>res(im);
+      im.src=URL.createObjectURL(b);}))
+    .then(im=>{if(myReq!==PLAYER.req)return;drawPlayer(im);$('vInfo').textContent='';})
+    .catch(()=>{if(myReq===PLAYER.req)$('vInfo').textContent='计算失败';});
+}
+/* 重跑算法: 重载 main.py(热重载, 不重启服务) + 从第 0 帧重放当前帧。
+   算法是有状态的(EMA/参考色/基线逐帧演化), 改完代码只重算这一帧结果会是错的。 */
+async function refreshFrame(){
+  if(!PLAYER.t){return;}
+  const i=PLAYER.i;
+  $('vInfo').textContent='重载 main.py…';
+  let r;
+  try{r=await api('/api/reload_algo',{method:'POST'});}
+  catch(e){$('vInfo').textContent='重载请求失败（服务还在吗？）';return;}
+  if(!r.ok){$('vInfo').textContent='main.py 载入失败，仍在用上一次的算法：'+(r.error||'');return;}
+  PLAYER.gt=(await api(`/api/task/${PLAYER.t}/annotations`)).frames;  // 真值可能刚改过
+  refreshVDots();
+  await loadVerif(i,true);
+}
+function buildVFilm(t,n){ // 底部胶片=原始帧; 点击查看该帧算法标注结果
+  const f=$('vFilm');f.innerHTML='';
+  for(let i=0;i<n;i++){
+    const c=document.createElement('div');c.className='cell';
+    c.innerHTML=`<img loading="lazy" src="/api/task/${t}/frame/${i}.jpg"><div class="dot"></div>`;
+    c.onclick=()=>{PLAYER.playing=false;clearTimeout(PLAYER.timer);$('btnPlay').textContent='▶ 播放';
+      loadVerif(i);};
+    f.appendChild(c);
+  }
+  refreshVDots();
+}
+function refreshVDots(){
+  document.querySelectorAll('#vFilm .cell').forEach((c,i)=>{
+    const a=PLAYER.gt&&PLAYER.gt[i];const d=c.querySelector('.dot');
+    d.style.background=(a&&(a.line||a.state!==null&&a.state!==undefined))?'var(--ok)':'#555';
+  });
+}
+$('vTask').onchange=e=>{CUR=e.target.value;loadTasks();loadVerifyTask(e.target.value);saveUiState();};
+$('btnRefresh').onclick=refreshFrame;
+$('btnRender').onclick=async()=>{ // 整段渲染只用于导出 mp4
+  const t=$('vTask').value;if(!t)return;
+  $('vInfo').textContent='整段渲染中（导出 mp4 用）…';
+  const r=await api(`/api/task/${t}/render`,{method:'POST'});
+  if(r.ok){$('vInfo').textContent=`已渲染 ${r.n} 帧`;
+    $('vDl').href=`/api/task/${t}/verif.mp4`;$('vDl').style.display='inline';}
+  else $('vInfo').textContent='失败: '+(r.error||'');
+};
+$('btnPlay').onclick=()=>{
+  if(!PLAYER.n)return;
+  PLAYER.playing=!PLAYER.playing;$('btnPlay').textContent=PLAYER.playing?'⏸ 暂停':'▶ 播放';
+  if(PLAYER.playing){const step=()=>{if(!PLAYER.playing)return;
+    const nx=(PLAYER.i+1)%PLAYER.n;loadVerif(nx).then(()=>{PLAYER.i=nx;
+      PLAYER.timer=setTimeout(step,1000/(14*+$('vSpeed').value));});};step();}
+  else clearTimeout(PLAYER.timer);
+};
+$('vScrub').oninput=e=>{PLAYER.playing=false;clearTimeout(PLAYER.timer);$('btnPlay').textContent='▶ 播放';
+  PLAYER.i=+e.target.value;loadVerif(PLAYER.i);};
+/* ---------- 比对 ---------- */
+$('btnCmp').onclick=async()=>{
+  const t=$('cTask').value;if(!t)return;
+  $('cInfo').textContent='比对中…';
+  const r=await api(`/api/task/${t}/compare`,{method:'POST'});
+  const s=r.summary;
+  /* 抖动指标: MAE/worst 只按幅度排序, 看不见"小幅度高频跳"; 这两个 std 才是
+     检验滤波类改动(FILT_EMA_A/黑线优先)的正确指标。键名自带单位(ang=度)。 */
+  const j=s.jitter||{},ja=j.ang,jo=j.off;
+  const g=(o,k,u)=>(o&&o[k]!=null)?o[k].toFixed(u==='deg'?2:1)+(u==='deg'?'°':''):'-';
+  $('cCards').innerHTML=`
+   <div class="card"><div class="v">${s.n_frames}</div>总帧数</div>
+   <div class="card"><div class="v">${s.n_valid} (${Math.round(s.n_valid/s.n_frames*100)}%)</div>有效帧</div>
+   <div class="card"><div class="v">${s.n_line_gt}</div>真值线帧</div>
+   <div class="card"><div class="v">${s.off_mae!=null?s.off_mae.toFixed(1):'-'}</div>off MAE</div>
+   <div class="card"><div class="v">${s.off_max??'-'}</div>off 最大误差</div>
+   <div class="card"><div class="v">${s.ang_mae_deg!=null?s.ang_mae_deg.toFixed(2)+'°':'-'}</div>角度 MAE</div>
+   <div class="card"><div class="v">${s.state_match}</div>状态判对</div>
+   <div class="card"><div class="v">${g(ja,'res_std_deg','deg')}</div>角度残差 std</div>
+   <div class="card"><div class="v">${g(ja,'stair_std_deg','deg')}</div>角度台阶 std</div>
+   <div class="card"><div class="v">${g(ja,'pred_stair_std_deg','deg')} / ${g(ja,'gt_stair_std_deg','deg')}</div>角度台阶 std 预测/真值</div>
+   <div class="card"><div class="v">${g(ja,'stair_max_deg','deg')}</div>最大角度台阶</div>
+   <div class="card"><div class="v">${g(jo,'res_std','norm')}</div>off 残差 std</div>
+   <div class="card"><div class="v">${g(jo,'stair_std','norm')}</div>off 台阶 std</div>
+   <div class="card"><div class="v">${jo?jo.n_stairs:0}</div>台阶对数</div>`;
+  $('worstTbl').querySelector('tbody').innerHTML=(r.worst||[]).map(w=>`
+   <tr class="${Math.abs(w.off_err)>30?'bad':''}"><td>#${w.i}</td>
+   <td><img src="/api/task/${t}/frame/${w.i}.jpg" height=54></td>
+   <td>off ${w.p_off} ang ${(w.p_ang/10).toFixed(1)} st${w.p_st}</td>
+   <td>off ${w.g_off} ang ${(w.g_ang/10).toFixed(1)} st${w.g_st??'-'}</td>
+   <td>off_err ${w.off_err>0?'+':''}${w.off_err} / ang ${(w.ang_err/10).toFixed(1)}°</td></tr>`).join('');
+  $('stTbl').querySelector('tbody').innerHTML=(r.st_bad||[]).map(w=>`
+   <tr><td>#${w.i}</td><td><img src="/api/task/${t}/frame/${w.i}.jpg" height=54></td>
+   <td>st${w.p_st}</td><td>st${w.g_st}</td></tr>`).join('');
+  $('jitTbl').querySelector('tbody').innerHTML=(r.jit_bad||[]).map(w=>{
+    const dg=w.unit==='deg';
+    const f=v=>dg?v.toFixed(2)+'°':v.toFixed(1);
+    return `<tr class="${Math.abs(dg?w.stair/2:w.stair/20)>1?'bad':''}"><td>#${w.i}</td>
+     <td><img src="/api/task/${t}/frame/${w.i}.jpg" height=54></td>
+     <td>${dg?'角度':'offset'}</td>
+     <td>${w.stair>0?'+':''}${f(w.stair)}</td>
+     <td>${f(w.p)} → ${f(w.g)}</td>
+     <td>${w.res>0?'+':''}${f(w.res)}</td></tr>`;}).join('')
+   ||`<tr><td colspan=6 class="dim">没有相邻的"有真值线且预测有效"帧对 —— 真值还没连片标，抖动无从谈起</td></tr>`;
+  $('cInfo').textContent='完成';
+};
+/* ---------- init: 恢复上次状态(任务/帧/页签) ---------- */
+(async function(){
+  const s=loadUiState();
+  if(s&&s.task)CUR=s.task;
+  await loadTasks();
+  if(CUR&&TASKS.some(t=>t.name===CUR)){
+    if(s&&s.tab==='verify')switchTab('verify');
+    else if(s&&s.tab==='compare')switchTab('compare');
+    else await openTask(s&&s.frame||0);
+  }
+})();
+</script>
+</body>
+</html>

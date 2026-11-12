@@ -1,0 +1,212 @@
+
+# ---------- B2: subpixel edges ----------
+
+def first_fall_from_outside(prof, out_dir):
+    L = len(prof)
+    p = prof.astype(np.float64)
+    outer = p[:max(4, L // 3)] if out_dir < 0 else p[-max(4, L // 3):]
+    hi = np.percentile(outer, 80)
+    lo = np.percentile(p, 10)
+    if hi - lo < 30:
+        return None
+    mid = (hi + lo) / 2
+    seq = p if out_dir < 0 else p[::-1]
+    below = np.where(seq < mid)[0]
+    if len(below) == 0 or below[0] == 0:
+        return None
+    i = below[0] - 1
+    a, b = seq[i], seq[i + 1]
+    if b >= a:
+        return None
+    x = i + (mid - a) / (b - a)
+    return x if out_dir < 0 else L - 1 - x
+
+
+def fit_edge(warp, axis, a0, a1, expect, out_dir):
+    pos = []
+    y_lo = int(max(0, expect - 1.5 * PPM))
+    y_hi = int(min(warp.shape[0], expect + 1.5 * PPM))
+    x_lo = int(max(0, expect - 1.5 * PPM))
+    x_hi = int(min(warp.shape[1], expect + 1.5 * PPM))
+    for t in np.arange(a0, a1, 2.0):
+        ti = int(round(t))
+        if axis == 'h':
+            if ti < 0 or ti >= warp.shape[1]:
+                continue
+            prof = warp[y_lo:y_hi, ti]
+        else:
+            if ti < 0 or ti >= warp.shape[0]:
+                continue
+            prof = warp[ti, x_lo:x_hi]
+        e = first_fall_from_outside(prof, out_dir)
+        if e is None:
+            continue
+        pos.append((ti, (y_lo if axis == 'h' else x_lo) + e))
+    if len(pos) < 12:
+        return None, 0.0
+    arr = np.array(pos)
+    med = np.median(arr[:, 1])
+    arr = arr[np.abs(arr[:, 1] - med) < 0.5 * PPM]
+    if len(arr) < 10:
+        return None, 0.0
+    A = np.stack([arr[:, 0], np.ones_like(arr[:, 0])], 1)
+    coef, *_ = np.linalg.lstsq(A, arr[:, 1], rcond=None)
+    return coef, float(np.std(arr[:, 1] - A @ coef))
+
+
+def finder_quad(warp, mx, my):
+    X0, Y0 = OFF + mx * PPM, OFF + my * PPM
+    X7, Y7 = X0 + 7 * PPM, Y0 + 7 * PPM
+    top = fit_edge(warp, 'h', X0 + 6, X7 - 6, Y0, -1)
+    bot = fit_edge(warp, 'h', X0 + 6, X7 - 6, Y7, +1)
+    left = fit_edge(warp, 'v', Y0 + 6, Y7 - 6, X0, -1)
+    right = fit_edge(warp, 'v', Y0 + 6, Y7 - 6, X7, +1)
+    if any(e[0] is None for e in [top, bot, left, right]):
+        return None
+
+    def inter(hl, vl):
+        ah, bh = hl
+        av, bv = vl
+        y = (ah * bv + bh) / (1 - ah * av + 1e-9)
+        x = av * y + bv
+        return np.array([(x - OFF) / PPM, (y - OFF) / PPM])
+    return dict(tl=inter(top[0], left[0]), tr=inter(top[0], right[0]),
+                br=inter(bot[0], right[0]), bl=inter(bot[0], left[0]))
+
+
+def timing_edge_points(warp):
+    pts = []
+    strip = warp[int(OFF + 5.6 * PPM):int(OFF + 7.4 * PPM), :]
+    p = strip.mean(axis=0).astype(np.float64)
+    hi, lo = np.percentile(p, 85), np.percentile(p, 15)
+    mid = (hi + lo) / 2
+    d = np.diff(p)
+    for k in range(6, 14):
+        idx = np.where((np.arange(len(d)) >= OFF + (k - 0.7) * PPM) &
+                       (np.arange(len(d)) < OFF + (k + 0.7) * PPM))[0]
+        if len(idx) == 0:
+            continue
+        i = idx[int(np.argmin(d[idx]))] if k % 2 == 0 else idx[int(np.argmax(d[idx]))]
+        jump = d[i]
+        if (k % 2 == 0 and jump > -20) or (k % 2 == 1 and jump < 20):
+            continue
+        a, b = p[i], p[i + 1]
+        if b == a:
+            continue
+        x = (i + (mid - a) / (b - a) - OFF) / PPM
+        if abs(x - k) < 0.5:
+            pts.append(((x, 6.5), (float(k), 6.5)))
+    strip = warp[:, int(OFF + 5.6 * PPM):int(OFF + 7.4 * PPM)]
+    p = strip.mean(axis=1).astype(np.float64)
+    hi, lo = np.percentile(p, 85), np.percentile(p, 15)
+    mid = (hi + lo) / 2
+    d = np.diff(p)
+    for k in range(6, 14):
+        idx = np.where((np.arange(len(d)) >= OFF + (k - 0.7) * PPM) &
+                       (np.arange(len(d)) < OFF + (k + 0.7) * PPM))[0]
+        if len(idx) == 0:
+            continue
+        i = idx[int(np.argmin(d[idx]))] if k % 2 == 0 else idx[int(np.argmax(d[idx]))]
+        jump = d[i]
+        if (k % 2 == 0 and jump > -20) or (k % 2 == 1 and jump < 20):
+            continue
+        a, b = p[i], p[i + 1]
+        if b == a:
+            continue
+        y = (i + (mid - a) / (b - a) - OFF) / PPM
+        if abs(y - k) < 0.5:
+            pts.append(((6.5, y), (6.5, float(k))))
+    return pts
+
+
+def cubic_design(u, v):
+    return np.stack([np.ones_like(u), u, v, u * u, u * v, v * v,
+                     u ** 3, u * u * v, u * v * v, v ** 3], 1)
+
+
+def robust_fit(Amat, b, w0, iters=5):
+    w = w0.copy()
+    coef = np.zeros(Amat.shape[1])
+    for _ in range(iters):
+        W = w[:, None]
+        coef = np.linalg.lstsq(Amat * W, b * w, rcond=None)[0]
+        r = b - Amat @ coef
+        sc = 1.4826 * np.median(np.abs(r - np.median(r))) + 1e-6
+        w = w0 * np.clip(1 - (np.abs(r) / (4.5 * sc)) ** 2, 0, 1) ** 2
+    return coef
+
+
+def collect_anchors(warp, coef_x, coef_y):
+    anchors = []
+    pos = {'TL': (0, 0), 'TR': (N - 7, 0), 'BL': (0, N - 7)}
+    for k, (mx, my) in pos.items():
+        X0, Y0 = OFF + mx * PPM, OFF + my * PPM
+        X7, Y7 = X0 + 7 * PPM, Y0 + 7 * PPM
+        edges = [('h', X0 + 6, X7 - 6, Y0, -1, my),
+                 ('h', X0 + 6, X7 - 6, Y7, +1, my + 7),
+                 ('v', Y0 + 6, Y7 - 6, X0, -1, mx),
+                 ('v', Y0 + 6, Y7 - 6, X7, +1, mx + 7)]
+        for (axis, a0, a1, expect, od, line_k) in edges:
+            coef, std = fit_edge(warp, axis, a0, a1, expect, od)
+            if coef is None:
+                continue
+            w = 1.0 / (1.0 + std * std)
+            if axis == 'h':
+                for u in np.arange(mx + 0.5, mx + 7.0, 0.5):
+                    bx = cubic_design(np.array([u]), np.array([float(line_k)]))
+                    xw = OFF + u * PPM + float((bx @ coef_x)[0])
+                    anchors.append((u, float(line_k), xw, coef[0] * xw + coef[1], w))
+            else:
+                for v in np.arange(my + 0.5, my + 7.0, 0.5):
+                    by = cubic_design(np.array([float(line_k)]), np.array([v]))
+                    yw = OFF + v * PPM + float((by @ coef_y)[0])
+                    anchors.append((float(line_k), v, coef[0] * yw + coef[1], yw, w))
+    qd = finder_quad(warp, 0, 0)
+    if qd:
+        for key, (cu, cv) in [('tl', (0, 0)), ('tr', (7, 0)), ('br', (7, 7)), ('bl', (0, 7))]:
+            anchors.append((cu, cv, OFF + qd[key][0] * PPM, OFF + qd[key][1] * PPM, 3.0))
+    for (a, b), (c, d) in timing_edge_points(warp):
+        anchors.append((c, d, OFF + a * PPM, OFF + b * PPM, 1.5))
+    return anchors
+
+
+def pred_x(coef_x, u, v):
+    return OFF + u * PPM + float((cubic_design(np.array([u]), np.array([v])) @ coef_x)[0])
+
+
+def pred_y(coef_y, u, v):
+    return OFF + v * PPM + float((cubic_design(np.array([u]), np.array([v])) @ coef_y)[0])
+
+
+def sample_matrix(warp, coef_x, coef_y):
+    vals = np.zeros((N, N), np.float32)
+    for r in range(N):
+        for c in range(N):
+            xc = pred_x(coef_x, c + 0.5, r + 0.5)
+            yc = pred_y(coef_y, c + 0.5, r + 0.5)
+            pts = []
+            for dy in np.linspace(-0.15 * PPM, 0.15 * PPM, 5):
+                for dx in np.linspace(-0.15 * PPM, 0.15 * PPM, 5):
+                    xi, yi = int(xc + dx), int(yc + dy)
+                    if 0 <= xi < S and 0 <= yi < S:
+                        pts.append(warp[yi, xi])
+            vals[r, c] = np.median(pts) if pts else 128.0
+    _, bw = cv2.threshold(np.clip(vals, 0, 255).astype(np.uint8), 0, 255,
+                          cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    return (bw < 127).astype(np.uint8)
+
+
+def structure_score(m):
+    dark = np.zeros((N, N), bool)
+    light = np.zeros((N, N), bool)
+
+    def fr_(r0, c0):
+        for r in range(7):
+            for c in range(7):
+                dd = max(abs(r - 3), abs(c - 3))
+                (dark if dd != 1 else light)[r0 + r, c0 + c] = True
+    fr_(0, 0)
+    fr_(0, N - 7)
+    fr_(N - 7, 0)
+    for c in range(8):
+        light[7, c] = light[c, 7] = light[7, N - 1 - c]

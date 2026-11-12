@@ -1,0 +1,131 @@
+# -*- coding: utf-8 -*-
+"""
+decode_qr.py - 高难度二维码照片解码器(屏幕拍摄/强透视/摩尔纹场景)
+
+管线:
+  A. 快速通道: zxing-cpp / pyzbar / OpenCV 直接解码
+  B. 几何重建: finder轮廊检测 -> 仿射warp -> 亚像素边缘锚点 -> 三次多项式形变场
+  C. 模块采样: 网格中心中值采样 -> Otsu -> 21x21 模块矩阵
+  D. 鲁棒解码: 8姿态 x 4 ECC x 8掩码 RS直接解码;
+               失败则进入短载荷暴力补全(候选前缀+标准填充, 用完好ECC字节验证)
+
+用法: python decode_qr.py <图片路径> [--debug]
+依赖: opencv-python numpy reedsolo  (可选增强: zxing-cpp pyzbar)
+"""
+import sys
+import cv2
+import numpy as np
+
+N = 21
+PPM = 40
+QZ = 6
+S = (N + 2 * QZ) * PPM
+OFF = QZ * PPM
+
+
+def imread_u(path):
+    img = cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if img is None:
+        raise IOError('cannot read: ' + path)
+    return img
+
+
+def fast_decode(gray):
+    try:
+        import zxingcpp
+        for kw in [dict(try_harder=True, try_rotate=True),
+                   dict(try_harder=True, try_rotate=True, try_downscale=True)]:
+            try:
+                res = zxingcpp.read_barcodes(gray, **kw)
+            except Exception:
+                res = []
+            if res:
+                return res[0].text
+    except ImportError:
+        pass
+    try:
+        from pyzbar import pyzbar
+        r = pyzbar.decode(gray)
+        if r:
+            return r[0].data.decode('utf-8', 'replace')
+    except ImportError:
+        pass
+    s = cv2.QRCodeDetector().detectAndDecode(gray)[0]
+    return s if s else None
+
+
+def find_finder_centers(gray):
+    found = []
+    for blk in [51, 75, 101]:
+        for C in [5, 10, 15]:
+            bw = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                       cv2.THRESH_BINARY, blk, C)
+            for pol in [0, 1]:
+                b = bw if pol == 0 else 255 - bw
+                cnts, hier = cv2.findContours(b, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                if hier is None:
+                    continue
+                hier = hier[0]
+                for i, c in enumerate(cnts):
+                    a = cv2.contourArea(c)
+                    if a < 400:
+                        continue
+                    ch = hier[i][2]
+                    if ch < 0:
+                        continue
+                    ca = cv2.contourArea(cnts[ch])
+                    if ca <= 0 or not (0.4 < ca / a < 0.65):
+                        continue
+                    gh = hier[ch][2]
+                    if gh < 0:
+                        continue
+                    ga = cv2.contourArea(cnts[gh])
+                    if ga / ca < 0.2:
+                        continue
+                    M = cv2.moments(c)
+                    if M['m00'] == 0:
+                        continue
+                    found.append((M['m10'] / M['m00'], M['m01'] / M['m00']))
+    if not found:
+        return None
+    clusters = []
+    for x, y in found:
+        placed = False
+        for cl in clusters:
+            if np.hypot(x - cl[0] / cl[2], y - cl[1] / cl[2]) < 25:
+                cl[0] += x
+                cl[1] += y
+                cl[2] += 1
+                placed = True
+                break
+        if not placed:
+            clusters.append([x, y, 1])
+    centers = [np.array([c[0] / c[2], c[1] / c[2]]) for c in clusters]
+    centers.sort(key=lambda p: -sum(np.hypot(p[0] - q[0], p[1] - q[1]) for q in centers))
+    return centers[:3] if len(centers) >= 3 else None
+
+
+def orient_centers(centers):
+    dots = []
+    for i in range(3):
+        a = centers[(i + 1) % 3] - centers[i]
+        b = centers[(i + 2) % 3] - centers[i]
+        dots.append(abs(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))))
+    i = int(np.argmin(dots))
+    v = centers[i]
+    a, b = centers[(i + 1) % 3], centers[(i + 2) % 3]
+    cross = (b[0] - v[0]) * (a[1] - v[1]) - (b[1] - v[1]) * (a[0] - v[0])
+    if cross > 0:
+        return v, b, a
+    return v, a, b
+
+
+def affine_from_centers(TL, TR, BL):
+    ex = (TR - TL) / (N - 7)
+    ey = (BL - TL) / (N - 7)
+    A = np.array([[ex[0], ey[0]], [ex[1], ey[1]]])
+    t = TL - 3.5 * ex - 3.5 * ey
+    Ainv = np.linalg.inv(A)
+    return np.array([[Ainv[0, 0], Ainv[0, 1], -(Ainv @ t)[0]],
+                     [Ainv[1, 0], Ainv[1, 1], -(Ainv @ t)[1]],
+                     [0, 0, 1]])

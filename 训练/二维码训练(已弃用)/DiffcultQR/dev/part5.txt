@@ -1,0 +1,104 @@
+
+
+# ---------- main ----------
+
+def main():
+    if len(sys.argv) < 2:
+        print(__doc__)
+        sys.exit(1)
+    debug = '--debug' in sys.argv
+    path = sys.argv[1]
+    img = imread_u(path)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+
+    print('[1/4] fast path (zxing/pyzbar/OpenCV)...')
+    r = fast_decode(gray)
+    if r:
+        print('DECODED: %r' % r)
+        return
+
+    print('[2/4] finder detection + perspective warp...')
+    centers = find_finder_centers(gray)
+    if centers is None:
+        print('FAIL: three finder patterns not found')
+        sys.exit(2)
+    TL, TR, BL = orient_centers(centers)
+    H0 = affine_from_centers(TL, TR, BL)
+    T = np.array([[PPM, 0, OFF], [0, PPM, OFF], [0, 0, 1]], np.float64)
+    Hcur = T @ H0
+
+    canon = {'TL': [(0, 0), (7, 0), (7, 7), (0, 7)],
+             'TR': [(N - 7, 0), (N, 0), (N, 7), (N - 7, 7)],
+             'BL': [(0, N - 7), (7, N - 7), (7, N), (0, N)]}
+    pos = {'TL': (0, 0), 'TR': (N - 7, 0), 'BL': (0, N - 7)}
+
+    print('[3/4] subpixel edge anchors + cubic deformation field...')
+    warp = None
+    for it in range(3):
+        warp = cv2.warpPerspective(gray, Hcur.astype(np.float32), (S, S),
+                                   flags=cv2.INTER_CUBIC)
+        src, dst = [], []
+        for k in ['TL', 'TR', 'BL']:
+            qd = finder_quad(warp, *pos[k])
+            if qd is None:
+                continue
+            for key, ci in [('tl', 0), ('tr', 1), ('br', 2), ('bl', 3)]:
+                src.append(list(qd[key]))
+                dst.append(list(canon[k][ci]))
+        if len(src) < 8:
+            print('FAIL: finder edge fitting insufficient')
+            sys.exit(3)
+        Hm, _ = cv2.findHomography(np.array(src, np.float32),
+                                   np.array(dst, np.float32),
+                                   cv2.RANSAC, 0.3)
+        Hcur = (T @ Hm @ np.linalg.inv(T)) @ Hcur
+    warp = cv2.warpPerspective(gray, Hcur.astype(np.float32), (S, S),
+                               flags=cv2.INTER_CUBIC)
+
+    coef_x = np.zeros(10)
+    coef_y = np.zeros(10)
+    for rnd in range(3):
+        anchors = collect_anchors(warp, coef_x, coef_y)
+        au = np.array([a[0] for a in anchors], np.float64)
+        av = np.array([a[1] for a in anchors], np.float64)
+        ax = np.array([a[2] for a in anchors], np.float64)
+        ay = np.array([a[3] for a in anchors], np.float64)
+        aw = np.array([a[4] for a in anchors], np.float64)
+        A = cubic_design(au, av)
+        coef_x = robust_fit(A, ax - (OFF + au * PPM), aw)
+        coef_y = robust_fit(A, ay - (OFF + av * PPM), aw)
+    if debug:
+        cv2.imwrite('debug_warp.png', warp)
+
+    mat = sample_matrix(warp, coef_x, coef_y)
+    sc = structure_score(mat)
+    print('  module matrix structure score: %.3f' % sc)
+    if debug:
+        np.save('debug_matrix.npy', mat)
+
+    print('[4/4] RS decoding...')
+    r = try_rs_decode(mat)
+    if r:
+        t, ori, ecc, mi, ne = r
+        print('DECODED: %r  (orientation %d, ECC=%s, mask=%d, RS fixed %d codewords)'
+              % (t, ori, ecc, mi, ne))
+        return
+
+    print('  direct RS failed, trying short-payload brute completion...')
+    ac = np.array([[3.5, 3.5], [N - 3.5, 3.5], [3.5, N - 3.5]])
+    damage = np.zeros((N, N), bool)
+    for r_ in range(N):
+        for c_ in range(N):
+            d = min(np.hypot(c_ + 0.5 - a[0], r_ + 0.5 - a[1]) for a in ac)
+            damage[r_, c_] = d > 6.5
+    res = try_brute_complete(mat, damage)
+    if res:
+        for t in res:
+            print('DECODED (brute completion): %r' % t)
+        return
+    print('FAIL: all methods exhausted. use --debug for artifacts.')
+    sys.exit(4)
+
+
+if __name__ == '__main__':
+    main()

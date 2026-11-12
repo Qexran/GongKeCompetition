@@ -1,0 +1,8 @@
+path: ./dataset
+train: images/train
+val: images/val
+
+names:
+  0: pellet
+  1: cone
+  2: cylinder

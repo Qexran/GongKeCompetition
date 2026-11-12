@@ -1,0 +1,7 @@
+        light[N - 8, c] = light[N - 1 - c, 7] = True
+    for i in range(8, N - 8):
+        (dark if i % 2 == 0 else light)[6, i] = True
+        (dark if i % 2 == 0 else light)[i, 6] = True
+    dark[13, 8] = True
+    good = (m.astype(bool) & dark).sum() + (~m.astype(bool) & light).sum()
+    return good / (dark.sum() + light.sum())

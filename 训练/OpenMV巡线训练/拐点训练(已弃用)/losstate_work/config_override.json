@@ -1,0 +1,5 @@
+{
+  "LINE_LOST_HOLD_S": 5.0,
+  "LINE_LOST_SEARCH_S": 5.0,
+  "LINE_SEARCH_STEER": -0.5
+}

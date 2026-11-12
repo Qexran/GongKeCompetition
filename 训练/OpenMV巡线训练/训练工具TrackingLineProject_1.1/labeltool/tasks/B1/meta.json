@@ -1,0 +1,8 @@
+{
+ "name": "B1",
+ "source_video": "C:\\Users\\Administrator\\Desktop\\TrackingLineProject_1.1\\labeltool\\uploads\\视频21.mp4",
+ "n_frames": 276,
+ "dedup": true,
+ "every": 1,
+ "fps": 14
+}

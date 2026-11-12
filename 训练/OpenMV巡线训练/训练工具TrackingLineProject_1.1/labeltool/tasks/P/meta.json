@@ -1,0 +1,8 @@
+{
+ "name": "P",
+ "source_video": "C:\\Users\\death\\Desktop\\TrackingLineProject_1.1\\labeltool\\uploads\\27.mp4",
+ "n_frames": 234,
+ "dedup": true,
+ "every": 1,
+ "fps": 14
+}

@@ -1,0 +1,77 @@
+
+
+def build_data_stream(first_bits, ndata):
+    bits = list(first_bits) + [0, 0, 0, 0]
+    if len(bits) % 8:
+        bits += [0] * (8 - len(bits) % 8)
+    pads = [[1, 1, 1, 0, 1, 1, 0, 0], [0, 0, 0, 1, 0, 0, 0, 1]]
+    i = 0
+    while len(bits) < ndata * 8:
+        bits += pads[i % 2]
+        i += 1
+    out = []
+    for k in range(ndata):
+        v = 0
+        for b in bits[k * 8:(k + 1) * 8]:
+            v = (v << 1) | b
+        out.append(v)
+    return bytes(out)
+
+
+def candidates24():
+    yield [0] * 24
+    for ln in range(1, 35):
+        for g in range(1024):
+            yield [0, 0, 0, 1] + [(ln >> (9 - i)) & 1 for i in range(10)] + \
+                  [(g >> (9 - i)) & 1 for i in range(10)]
+    for ln in range(1, 26):
+        for g in range(2048):
+            yield [0, 0, 1, 0] + [(ln >> (8 - i)) & 1 for i in range(9)] + \
+                  [(g >> (10 - i)) & 1 for i in range(11)]
+    for ln in range(1, 18):
+        for g in range(4096):
+            yield [0, 1, 0, 0] + [(ln >> (7 - i)) & 1 for i in range(8)] + \
+                  [(g >> (11 - i)) & 1 for i in range(12)]
+
+
+def try_brute_complete(mat, damage_own):
+    results = set()
+    for ori, (base, dmask) in enumerate(dih_pairs(mat, damage_own)):
+        for ecc_name, info in q.ECC_INFO.items():
+            nsym = info['total'] - info['data']
+            ndata = info['data']
+            rsc = RSCodec(nsym)
+            for mi in range(8):
+                ucw = codewords_of(base, mi)
+                good = np.ones(len(ucw), bool)
+                for cw in range(len(ucw)):
+                    for b in range(8):
+                        bi = cw * 8 + b
+                        if bi >= len(BITS):
+                            break
+                        if dmask[BITS[bi][0], BITS[bi][1]]:
+                            good[cw] = False
+                good_ecc = good[ndata:]
+                good_data = good[:ndata]
+                if good_ecc.sum() < 5 or good_data.sum() < 3:
+                    continue
+                hits = []
+                for cand in candidates24():
+                    data = build_data_stream(cand, ndata)
+                    md = sum(1 for j in range(ndata)
+                             if good_data[j] and data[j] != ucw[j])
+                    if md > 2:
+                        continue
+                    enc = rsc.encode(data)
+                    me = sum(1 for j in range(nsym)
+                             if good_ecc[j] and enc[ndata + j] != ucw[ndata + j])
+                    if me == 0:
+                        hits.append(data)
+                for data in hits:
+                    try:
+                        t = q.parse_payload(list(data))
+                    except Exception:
+                        continue
+                    if t and not t.startswith('<mode'):
+                        results.add(t)
+    return sorted(results)
