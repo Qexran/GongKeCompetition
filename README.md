@@ -231,12 +231,12 @@ SCRIPT_STEP_I1 (STEP_SCRIPT_CALL,         "执行任务一",    SCRIPT_PRESET_43
 <table>
   <tr>
     <td width="50%" align="center">
-      <img src="视觉/PI/GKS_Competition/JiGuangLogs/frames/20261005_034613_dotann.jpg" alt="三色靶盘识别">
+      <img src="assets/target-detection.jpg" alt="三色靶盘识别">
       <br><sub>三色靶盘识别：环心定位与瞄准点</sub>
     </td>
     <td width="50%" align="center">
-      <img src="训练/OpenMV巡线训练/OPENMV调试训练过程截图/uuu_big.png" alt="巡线测量">
-      <br><sub>巡线测量：参考色带、交界点与拟合直线</sub>
+      <img src="assets/color-ball-detection.jpg" alt="色球识别">
+      <br><sub>色球识别：三色掩膜、检测框与球心定位</sub>
     </td>
   </tr>
 </table>
