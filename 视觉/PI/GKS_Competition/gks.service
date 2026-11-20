@@ -1,0 +1,23 @@
+[Unit]
+Description=GKS 工科赛 主程序
+After=multi-user.target
+
+[Service]
+Type=simple
+User=xixi
+WorkingDirectory=/home/xixi/Desktop/GKS_Competition
+Environment=SERVICE_MODE=1
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u /home/xixi/Desktop/GKS_Competition/main.py
+Restart=always
+RestartSec=5
+StartLimitBurst=0
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+
+# TODO(工科赛): 接入串口/摄像头后，在此添加设备就绪等待：
+# ExecStartPre=/bin/bash /home/xixi/Desktop/GKS_Competition/scripts/wait_devices.sh
+
+[Install]
+WantedBy=multi-user.target

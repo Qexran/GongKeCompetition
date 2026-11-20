@@ -1,0 +1,536 @@
+# tasks/_color.py — 色球顺序识别（排爆区，主摄像头 HSV，一次性）
+#
+# 指令 "5"：识别场地上一行三球（红/绿/蓝各一个，顺序抽签决定）的**颜色顺序**与
+# 中心坐标，凑满三色即成功，按图像从左到右（中心 x 升序）排序。任务层只返回结果
+# dict，串口回传由 handler.py::_cmd_color 统一发送（TYPE_COORD TAG=0x03 二进制帧，
+# 见 docs/串口协议.md §6d），保持任务函数纯净可测（与 _hostage.py 同构）。
+#
+# 判定分两步（见 _detect_frame）: **只看饱和度找球 → 球内比哪一族色相像素最多**。
+# 这是相对判定, 所以色相族可以放宽到对色相环的无空隙划分, 见 config.COLOR_HUE_FAMILIES。
+# 为什么不用 YOLO：颜色是像素属性，这套在 Pi 上比 YOLOv8n(1~5fps) 快一个数量级；
+# YOLO 留给形状任务（人质三分类）。
+#
+# ⚠️ 三色各一个（比赛规则），故用「逐色取最大连通域」——哪块是哪色天然无歧义。
+#    若日后规则改成允许同色重复，要改成「先连通域聚类成球，再逐球判色」。
+# ⚠️ 多帧投票要求**小车静止**：所有票必须来自同一机位，车在动会让同一颜色跨帧散布
+#    过大（COLOR_MAX_SPREAD_PX 会作废该色）。单片机必须在底盘停稳后才发 "5"。
+import math
+import struct
+import time
+
+import cv2
+import numpy as np
+
+from camera import CameraManager
+from camera_lease import acquire_camera, release_camera
+
+COLOR_TAG = 0x03   # 结果帧子命令标记（TYPE_COORD DATA 首字节，<0x20 与 ASCII 帧不冲突）
+
+# 颜色码 → 画面标注用英文短名（cv2.putText 画不了中文）
+_COLOR_EN = {1: "R", 2: "G", 3: "B"}
+# 文字用球自己的颜色（BGR 顺序！color3=蓝 → (255,0,0)）
+_COLOR_BGR = {1: (0, 0, 255), 2: (0, 255, 0), 3: (255, 0, 0)}
+# ⚠️ 框选/十字**不能**用球自己的颜色 —— 蓝框画在蓝球上完全看不见（红框/绿框同理，
+#    只是没蓝那么彻底）。统一用黄色：对红/绿/蓝球和木纹/浅灰地面都高对比。
+_BOX_BGR = (0, 255, 255)
+
+
+def _clamp_u16(v):
+    """坐标落进 u16（struct.pack('<H') 越界会抛异常）。"""
+    return max(0, min(65535, int(round(v))))
+
+
+def _detect_frame(img, scale=1.0):
+    """单帧检测 → (balls, small)。balls = [{"color","cx","cy","r","area","circ","hits"}, ...]
+
+    **先找球、再定色**（判定方式移植自 pro 项目
+    cv2_python/zongchengxu20250724chusai.py::detect_stacking_and_color）:
+      1) 只看「饱和且够亮」找候选区域, **完全不看色相**（COLOR_SAT_MIN/VAL_MIN）
+         —— 用三色掩膜找球会把球在桌面上的**彩色反光**也并进来, 轮廓碎成非圆,
+         实测绿球圆度只有 0.29 直接被剔掉; 只看饱和度, 球是紧密整体（0.74）
+      2) 轮廓按面积/圆度筛 → 候选球（色相漂移不影响能不能找到球）
+      3) 球内逐族数色相像素 → **最多的那一族 = 这个球的颜色**
+      4) 每色只留最大的一颗（比赛规则: 红/绿/蓝各一个），按 cx 升序返回
+
+    这是**相对判定**而非绝对阈值: 不要求「必须落进红色区间才算红」，只要求
+    「三个族里红的最多」。所以色相族可以放宽到**对色相环的无空隙划分**，
+    光照/白平衡把色相推走了也只会影响判成哪一族，不会整颗球消失。
+
+    scale<1 时先降采样（1920×1080 下提速数倍），**返回的 cx/cy/r 已按 1/scale 还原回
+    全分辨率 1920×1080 像素** —— 协议与单片机端 COLOR_ALIGN_CX / COLOR_PX_TO_MM_X
+    全按全分辨率定义，混用会让标定全废。
+
+    ⚠️ 坐标空间不统一，别混用: cx/cy/r = **全分辨率**(给协议与画框用);
+       area/circ/hits = **降采样后**坐标系下的值(阈值 COLOR_MIN_AREA / COLOR_MIN_COLOR_PIXELS 按此定标)。
+    """
+    from config import (COLOR_HUE_FAMILIES, COLOR_SAT_MIN, COLOR_VAL_MIN,
+                        COLOR_MIN_AREA, COLOR_MAX_AREA, COLOR_MIN_CIRCULARITY,
+                        COLOR_MIN_COLOR_PIXELS)
+
+    if scale != 1.0:
+        small = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    else:
+        small = img
+    hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
+    hu = hsv[:, :, 0].astype(np.int16)
+    sa = hsv[:, :, 1].astype(np.int16)
+    va = hsv[:, :, 2].astype(np.int16)
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+
+    # 1) 找球: 只看「饱和且够亮」, 完全不看色相
+    #    （用三色掩膜求并集找球会把球周围的彩色反光并进来, 轮廓碎成非圆 → 被圆度剔掉）
+    smask = (((sa >= COLOR_SAT_MIN) & (va >= COLOR_VAL_MIN))
+             .astype(np.uint8) * 255)
+    smask = cv2.morphologyEx(smask, cv2.MORPH_OPEN, k)    # 去零散噪点
+    smask = cv2.morphologyEx(smask, cv2.MORPH_CLOSE, k)   # 补球面高光打出的洞
+
+    contours = cv2.findContours(smask, cv2.RETR_EXTERNAL,
+                                cv2.CHAIN_APPROX_SIMPLE)[-2]   # [-2] 兼容 OpenCV 3/4
+    balls = []
+    for c in contours:            # ⚠️ 不能写 max(contours,...)：空列表会抛 ValueError
+        area = cv2.contourArea(c)
+        if area < COLOR_MIN_AREA or area > COLOR_MAX_AREA:
+            continue
+        peri = cv2.arcLength(c, True)
+        if peri <= 0.0:
+            continue
+        circ = 4.0 * math.pi * area / (peri * peri)   # 1.0 = 正圆
+        if circ < COLOR_MIN_CIRCULARITY:
+            continue
+
+        # 2) 定色: 球轮廓内逐族数色相像素 → 最多的那一族胜出（相对判定, 见函数头注释）
+        cm = np.zeros(smask.shape, np.uint8)
+        cv2.drawContours(cm, [c], -1, 255, cv2.FILLED)
+        inside = (cm > 0)
+        hits = {}
+        for col, fams in COLOR_HUE_FAMILIES.items():
+            in_fam = np.logical_or.reduce([(hu >= lo) & (hu <= hi)
+                                           for lo, hi in fams])
+            hits[col] = int(np.count_nonzero(in_fam & inside))
+        color = max(hits, key=lambda c2: hits[c2])    # dict 恒有 3 项, 不会空
+        if hits[color] < COLOR_MIN_COLOR_PIXELS:
+            continue                                  # 哪一族都太少: 不是色球, 丢弃
+
+        (cx, cy), r = cv2.minEnclosingCircle(c)
+        balls.append({"color": color,
+                      "cx": cx / scale, "cy": cy / scale, "r": r / scale,
+                      "area": area, "circ": circ, "hits": hits})
+
+    # 每色只留最大的一颗（比赛规则: 红/绿/蓝各一个）。
+    # ⚠️ 必须在这里去重: 同一帧里某色若出现两个连通域（真球 + 远处噪点/反光），
+    #    两块都会被记进 votes[该色]；跨帧算中位数前要查散布 COLOR_MAX_SPREAD_PX，
+    #    两者 cx 相差几百像素 → **把整颗球作废**。实测踩过: 蓝球 cx=923 被一个
+    #    cx=1625、仅 94 像素的噪点连坐，蓝球整帧丢失。
+    best = {}
+    for b in balls:
+        if b["color"] not in best or b["area"] > best[b["color"]]["area"]:
+            best[b["color"]] = b
+    return sorted(best.values(), key=lambda b: b["cx"]), small
+
+
+def _annotate(frame, targets, extra=""):
+    """框选每个球 + 标从左到右序号.颜色 + 中心像素，供 Web 预览/现场核对。
+
+    框的大小来自检测到的实际半径 r（全分辨率像素），不是固定值——
+    这样「框住没框住」一眼就能看出阈值和圆度筛得对不对。
+    targets 里的 r 可缺（标定工具等外部调用），缺时退化为不画框只画十字。
+    """
+    out = frame.copy()
+    for rank, t in enumerate(targets, 1):
+        cx, cy = int(t["cx"]), int(t["cy"])
+        bgr = _COLOR_BGR.get(t["color"], (255, 0, 255))   # 文字用球色
+        r = t.get("r")
+        if r:
+            ri = max(6, int(r))
+            cv2.rectangle(out, (cx - ri, cy - ri), (cx + ri, cy + ri), _BOX_BGR, 4)
+        else:
+            cv2.circle(out, (cx, cy), 10, _BOX_BGR, 3)
+        cv2.drawMarker(out, (cx, cy), _BOX_BGR, cv2.MARKER_CROSS, 28, 3)
+        label = f"{rank}.{_COLOR_EN.get(t['color'], '?')} ({cx},{cy})"
+        off = (max(6, int(r)) + 10) if r else 24
+        org = (max(0, cx - 110), max(30, cy - off))
+        # 文字先描黑边再上球色：球色文字压在球上时（尤其蓝字压蓝球）才看得清
+        cv2.putText(out, label, org, cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 0, 0), 7)
+        cv2.putText(out, label, org, cv2.FONT_HERSHEY_SIMPLEX, 1.3, bgr, 3)
+    if extra:
+        cv2.putText(out, extra, (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.2,
+                    (255, 255, 255), 3)
+    return out
+
+
+def build_color_frame(ok, targets, yaw_deg=None, fit_ok=False):
+    """打包回传帧 DATA（见 docs/串口协议.md §6d）：
+    [TAG=0x03][status u8][count u8] + count×([color u8][cx u16 LE][cy u16 LE])。
+    失败帧 = [0x03][00][00]（count=0，让单片机立刻解锁，不空烧等待超时）。
+
+    小球对位扩展（2026-09）: 成功帧末尾追加 [yaw i16 LE 0.01°][fit_ok u8] →
+    LEN = 21（yaw/fit_ok 来自 fit_line_yaw, 见其 docstring）。yaw_deg 传 None
+    （失败帧/旧调用方）则不追加, 单片机按 LEN<21 兜底为 0/合格, 双向向后兼容。
+
+    ⚠️ 函数名必须与 _hostage.build_result_frame 区分：两者同名再经
+    tasks/__init__.py 重新导出会互相覆盖，单片机会收到错帧且不报错。
+    """
+    data = struct.pack("<BBB", COLOR_TAG, 1 if ok else 0, len(targets))
+    for t in targets:
+        data += struct.pack("<BHH", t["color"],
+                            _clamp_u16(t["cx"]), _clamp_u16(t["cy"]))
+    if yaw_deg is not None:
+        y01 = max(-32768, min(32767, int(round(yaw_deg * 100.0))))
+        data += struct.pack("<hB", y01, 1 if fit_ok else 0)
+    return data
+
+
+def _open_color_with_retry(abort_event, attempts=5, delay=0.3):
+    """打开主摄像头，失败时少量重试。
+
+    Web 触发识别前会先断开主摄推流，但推流线程释放设备需要一小段时间，
+    这里重试等待设备空闲（EBUSY）。串口直接调用时同样受益。
+    """
+    for i in range(attempts):
+        if abort_event is not None and abort_event.is_set():
+            return None
+        cap = acquire_camera(is_qr=False)   # 主摄像头（命中租约则复用预热好的）
+        if cap is not None:
+            return cap
+        print(f"[WARN] 主摄像头打开失败 (第{i + 1}/{attempts}次)，稍后重试...")
+        time.sleep(delay)
+    return None
+
+
+def _median(xs):
+    """已排序列表的中位数（偶数个取中间两个的均值）。"""
+    n = len(xs)
+    if n == 0:
+        return 0.0
+    if n % 2:
+        return float(xs[n // 2])
+    return (xs[n // 2 - 1] + xs[n // 2]) / 2.0
+
+
+def fit_line_yaw(targets):
+    """三球质心 fitLine → (yaw_deg, fit_ok)（小球对位扩展, 2026-09）。
+
+    yaw = 三球**中位数坐标**拟合直线的倾角（图像系 y 向下, 左高右低 = 左球 cy 小于
+    右球 cy 为正）。fitLine 返回的方向向量正负号不稳定, 必须先归一到 +x（从左到右）,
+    否则同一姿态两次调用的符号会随机翻转 180°。
+    ⚠️ 这是**图像角**, 不是车体航向角: 车原地转 θ, 等距球列在图像里只斜约 (h/Z)·θ
+    （相机俯视几何, 实测标定该比例, 预期 ~0.3 即车转 3° 图像只斜 ~1°）——
+    单片机端拿它换算车体角, 别当 1:1 用。
+    fit_ok: 各点到拟合直线的最大距离 < config.COLOR_FIT_MAX_DIST_PX 才算三点
+    共线合格 —— 某球质心被反光/遮挡拉偏时残差会明显变大, 单片机可据此要求重扫。
+    三球不齐（len != 3）直接判 (0, False), 不做两点拟合。
+    """
+    from config import COLOR_FIT_MAX_DIST_PX
+
+    if len(targets) != 3:
+        return 0.0, False
+    pts = np.float32([[t["cx"], t["cy"]] for t in targets])
+    # fitLine 返回 4×1 数组, reshape(-1) 拉平后逐个 float()（直接 float() 形状 (1,)
+    # 的元素在新版 numpy 会 TypeError, 本地实测踩过）
+    vx, vy, x0, y0 = (float(v) for v in
+                      cv2.fitLine(pts, cv2.DIST_L2, 0, 0.01, 0.01).reshape(-1))
+    if vx < 0:                      # 方向归一到从左到右（+x）, 否则符号随机翻转
+        vx, vy = -vx, -vy
+    yaw = math.degrees(math.atan2(vy, vx))
+    maxd = 0.0
+    for t in targets:               # 残差 = 点到直线的距离（叉积 / |方向向量|）
+        d = abs((t["cx"] - x0) * vy - (t["cy"] - y0) * vx)
+        maxd = max(maxd, d)
+    return yaw, (maxd < COLOR_FIT_MAX_DIST_PX)
+
+
+# ==================== 缺球推断（2026-09）：只认出两颗时把第三颗推回来 ====================
+#
+# 赛题必定给三颗球（红/绿/蓝各一），所以「只认出两颗」基本是**识别问题**而不是缺球。
+# 用已检出的两颗 + 板子坐标系把缺的那颗的**颜色与位置**推回来 —— 下游（单片机对位/抓取）
+# 一行都不用改：它拿到的仍是一个正常的三色结果（刻意**不打推断标记**）。
+#
+# 为什么是"用板子当坐标系"而不是"把矩形等分三份"：三球坐在板子这个平面上，
+# 平面 ↔ 像素之间差一个单应变换；用板子四角标定出来之后，球位在**板归一化坐标 (u,v)**
+# 里是固定的、与车停在哪/相机怎么歪都无关。实测本机位 u = 0.159 / 0.500 / 0.842
+# （等距 s=0.341、对称于 u=0.5、v≈0.375 平行于板子长边）——**不是 1/6、1/2、5/6**，
+# 等分会差约 1% 板宽（≈12px）。
+#
+# 三层判据逐级降级，**任何一层自洽性不过就判失败（不推）**，绝不瞎给：
+#   A1 球位表  : 最近槽匹配（标定一次；同时给 A2 当间距先验）
+#   A2 等距自洽: 三种占位假设各算两遍（中线先验 / 间距外推）→ 四条判据全过才算数
+#   B  两球外推: 板子看不到时用两球间距 + 方向；缺中球取中点（稳），缺端球靠弱先验
+# 实测精度（用 ref_color_frame 真值 + ±0.01u 噪声试算）：**缺中球（=对位基准）误差 0~9px
+# ≈0~3mm**；缺端球 1~13px（端球位只影响"抓哪颗/移到哪"）；三类对抗用例都被判据挡下。
+
+
+def _infer_slot_u(u1, u2, c, s_prior, tol_s, tol_center, u_min, u_max, agree_tol):
+    """A2 等距自洽：两个已检球的板坐标 u（u1<u2）→ 缺的那个槽的 u。
+
+    模型：三个槽在板坐标里等距（间距 s），且球行横跨板子中线（中球位 = c ≈ 0.5）。
+    对"这两个点占哪两个槽"的三种假设，各自用**两条独立路线**推缺的那个槽：
+      路线① 中线先验（缺端球时用 c±s，缺中球时就是 c）
+      路线② 间距外推（用观测到的间距往外延）
+    四条判据全过才算数，且两条路线必须互相同意 —— 对不上就返回 None（不推）。
+
+    纯函数（不碰图像/串口），离线可单独验。
+    返回 (u, 说明) 或 (None, 拒绝原因)。
+    """
+    cands = []
+    for name, mid_obs, s, u_a, u_b in (
+            ("相邻偏左", u2,            c - u1,        2 * c - u1,  2 * u2 - u1),
+            ("相邻偏右", u1,            u2 - c,        2 * c - u2,  2 * u1 - u2),
+            ("两端",    (u1 + u2) / 2.0, (u2 - u1) / 2.0, c,          (u1 + u2) / 2.0)):
+        res_center = abs(mid_obs - c)
+        if s <= 0.0:
+            continue
+        ok = (abs(s - s_prior) <= tol_s                       # ① 与标定间距相符
+              and res_center <= tol_center                     # ② 中线残差
+              and u_min <= u_a <= u_max and u_min <= u_b <= u_max   # ③ 落在板内不贴边
+              and abs(u_a - u_b) <= agree_tol)                 # ④ 两条路线互相同意
+        if ok:
+            cands.append((abs(u_a - u_b) + res_center, name, s, (u_a + u_b) / 2.0))
+    if not cands:
+        return None, "三种占位假设都不自洽（间距/中线/板内/两路一致 至少一条不过）"
+    cands.sort()
+    if len(cands) > 1 and (cands[1][0] - cands[0][0]) < 0.01:
+        return None, "两种占位假设几乎同样自洽 → 有歧义"
+    _, name, s, u_miss = cands[0]
+    return u_miss, "占位=%s, 间距=%.3f" % (name, s)
+
+
+def _infer_by_board(frame, targets, cfg):
+    """A（主）：用板子坐标系推断缺的那颗。返回 (cx, cy, 说明) 或 (None, None, 原因)。"""
+    # 板子识别（同一帧、同一只主摄）。⚠️ 用**包限定名**：任务模块是 tasks 包的一部分，
+    # 裸 `import _rect` 在树莓派上会 ImportError（sys.path 里是仓库根、不是 tasks/）。
+    from tasks._rect import detect_rect, _params
+
+    r = detect_rect(frame, _params())
+    if not r.get("success"):
+        return None, None, "板子识别失败(%s)" % r.get("reason", "")
+    src = np.float32(r["corners"])                  # 左上,右上,右下,左下
+    dst = np.float32([[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]])
+    H = cv2.getPerspectiveTransform(src, dst)       # 图像 → 板归一化坐标
+
+    # A1: 先按标定表最近槽匹配（最准，实测残差 ~1px）
+    tbl = cfg["slot_u"]
+    uv = []
+    for t in targets:
+        p = H @ np.array([t["cx"], t["cy"], 1.0])
+        uv.append((p[0] / p[2], p[1] / p[2]))
+    hit = [min(range(3), key=lambda k: abs(u - tbl[k])) for u, _ in uv]
+    res = max(abs(uv[i][0] - tbl[hit[i]]) for i in range(len(uv)))
+    if len(set(hit)) == 2 and res <= cfg["table_tol"]:
+        miss = ({0, 1, 2} - set(hit)).pop()
+        p = np.linalg.inv(H) @ np.array([tbl[miss], (uv[0][1] + uv[1][1]) / 2.0, 1.0])
+        return (float(p[0] / p[2]), float(p[1] / p[2]),
+                "A1 球位表: 缺槽%d(u=%.3f) 槽残差%.3f" % (miss, tbl[miss], res))
+
+    # A2: 表对不上 → 等距自洽（用观测到的 u 自己解）
+    (u1, v1), (u2, v2) = sorted(uv, key=lambda x: x[0])
+    u_miss, why = _infer_slot_u(u1, u2, cfg["u_center"], cfg["s"],
+                                cfg["s_tol"], cfg["center_tol"],
+                                cfg["u_min"], cfg["u_max"], cfg["agree_tol"])
+    if u_miss is None:
+        return None, None, "A2 %s（A1 表残差 %.3f 也超限）" % (why, res)
+    p = np.linalg.inv(H) @ np.array([u_miss, (v1 + v2) / 2.0, 1.0])
+    return (float(p[0] / p[2]), float(p[1] / p[2]), "A2 %s（A1 表残差 %.3f，故走自洽解）"
+            % (why, res))
+
+
+def _infer_by_two_balls(targets, cfg):
+    """B（兜底）：板子看不到时，用两球的图像间距 + 方向外推。
+
+    缺中球（两点是两端）取中点最稳；缺端球只能靠"中球位≈理想列 COLOR_BALL_CX_CENTER"
+    这个弱先验消歧（车停得偏就会判错，所以自洽性不过一律不推）。
+    返回 (cx, cy, 说明) 或 (None, None, 原因)。"""
+    (c1, x1, y1), (c2, x2, y2) = sorted(((t["color"], t["cx"], t["cy"]) for t in targets),
+                                        key=lambda v: v[1])
+    gap = x2 - x1
+    if gap <= 1.0:
+        return None, None, "B 两球 cx 几乎重合"
+    cands = []
+    for name, mid, x_miss in (("相邻偏左", x2, 2 * x2 - x1),
+                              ("相邻偏右", x1, 2 * x1 - x2),
+                              ("两端", (x1 + x2) / 2.0, (x1 + x2) / 2.0)):
+        if abs(mid - cfg["cx_center"]) <= cfg["cx_tol_px"]:
+            cands.append((abs(mid - cfg["cx_center"]), name, x_miss))
+    if not cands:
+        return None, None, "B 三种占位假设都不自洽（都在理想列 %.0f±%.0f 之外）" % (
+            cfg["cx_center"], cfg["cx_tol_px"])
+    cands.sort()
+    if len(cands) > 1 and (cands[1][0] - cands[0][0]) < 20.0:
+        return None, None, "B 两种占位假设几乎同样自洽 → 有歧义"
+    _, name, x_miss = cands[0]
+    return float(x_miss), float((y1 + y2) / 2.0), "B 两球外推: 占位=%s, 间距=%.0fpx" % (name, gap)
+
+
+def _infer_missing(frame, targets, names):
+    """只检到两颗 → 推第三颗（颜色=三色里缺的那个）。
+
+    返回 (新 targets, 说明) 或 (原 targets, None)。推不出来时**不推**（由调用方判失败）。
+    ⚠️ 刻意不返回任何"推断标记"：赛题必给三颗，只认出两颗基本是识别问题，下游照常当三色用。
+    """
+    from config import (COLOR_BALL_U_CENTER, COLOR_BALL_S, COLOR_BALL_S_TOL,
+                        COLOR_BALL_CENTER_TOL, COLOR_BALL_U_MIN, COLOR_BALL_U_MAX,
+                        COLOR_BALL_AGREE_TOL, COLOR_BALL_CX_CENTER,
+                        COLOR_BALL_CX_TOL_PX)
+    cfg = dict(u_center=COLOR_BALL_U_CENTER, s=COLOR_BALL_S, s_tol=COLOR_BALL_S_TOL,
+               center_tol=COLOR_BALL_CENTER_TOL, u_min=COLOR_BALL_U_MIN,
+               u_max=COLOR_BALL_U_MAX, agree_tol=COLOR_BALL_AGREE_TOL,
+               cx_center=COLOR_BALL_CX_CENTER, cx_tol_px=COLOR_BALL_CX_TOL_PX,
+               slot_u=[COLOR_BALL_U_CENTER - COLOR_BALL_S, COLOR_BALL_U_CENTER,
+                       COLOR_BALL_U_CENTER + COLOR_BALL_S],
+               table_tol=COLOR_BALL_S_TOL / 2.0)
+    have = {t["color"] for t in targets}
+    miss_color = [c for c in (1, 2, 3) if c not in have]
+    if len(have) != 2 or len(miss_color) != 1:
+        return targets, None
+    cx = cy = None
+    note = ""
+    if frame is not None:
+        try:
+            cx, cy, note = _infer_by_board(frame, targets, cfg)
+        except Exception as e:                      # 推断出问题绝不能把整条任务带崩
+            print(f"[WARN] 缺球推断(板子坐标系)异常: {type(e).__name__}: {e}")
+            cx = None
+    if cx is None:
+        cx2, cy2, why = _infer_by_two_balls(targets, cfg)
+        if cx2 is None:
+            print(f"[WARN] 缺球推断失败: {note or why}")
+            return targets, None
+        cx, cy, note = cx2, cy2, why
+    c = miss_color[0]
+    out = sorted(targets + [{"color": c, "color_name": names.get(c, str(c)),
+                             "cx": cx, "cy": cy, "r": 0.0,
+                             "votes": 0}], key=lambda t: t["cx"])
+    return out, note
+
+
+def run_color_detect(timeout=None, abort_event=None):
+    """主摄像头色球识别（限时 timeout 秒，默认取 config.COLOR_TIMEOUT）。
+
+    逐帧检测（先找球再定色，见 _detect_frame）→ 对每种颜色做**多帧投票**：出现帧数 ≥
+    COLOR_MIN_VOTES 才算该色存在（众数语义），坐标取跨帧**中位数**（抗单帧误检/抖动）；
+    同色 cx 跨帧散布超过 COLOR_MAX_SPREAD_PX 说明车在动或误检，该色作废。
+    凑满三色、且两两 cx 间隔 ≥ COLOR_MIN_GAP_PX（确认是三个球而非一个球裂成两块）
+    即成功，按 cx 升序排序。
+
+    坐标按**颜色**分别投票（不是按下标！）——否则漏检一帧就会把左球当成中间球。
+
+    Returns dict: {"success", "reason", "frame", "targets", "aborted"(仅打断时)}；
+        targets = [{"color","color_name","cx","cy","votes"}, ...]（cx/cy 为全分辨率像素）
+        失败时 targets 为「最好成绩」（仅 Web 显示用，单片机端收失败帧）。
+    """
+    from config import (COLOR_TIMEOUT, COLOR_VOTE_FRAMES, COLOR_MIN_VOTES,
+                        COLOR_MAX_SPREAD_PX, COLOR_MIN_GAP_PX, COLOR_PROC_SCALE,
+                        COLOR_MIN_TARGETS, COLOR_MAX_TARGETS, COLOR_COLOR_NAMES,
+                        COLOR_INFER_EN, COLOR_INFER_RETRY, COLOR_INFER_MIN_BALLS)
+
+    timeout = COLOR_TIMEOUT if timeout is None else timeout
+    cap = _open_color_with_retry(abort_event)
+    if cap is None:
+        # 打开阶段被打断同样视为「主动放弃」，而非失败
+        if abort_event is not None and abort_event.is_set():
+            print("[INFO] 色球识别任务被打断")
+            return {"success": False, "aborted": True, "reason": "",
+                    "frame": None, "targets": []}
+        return {"success": False, "reason": "主摄像头打开失败",
+                "frame": None, "targets": []}
+
+    try:
+        print(f"[INFO] 开始色球识别（三色投票, 每色≥{COLOR_MIN_VOTES}帧, "
+              f"限时 {timeout:.0f}s）...")
+        deadline = time.time() + timeout
+        votes = {1: [], 2: [], 3: []}     # color → [(cx, cy), ...]
+        frames_seen = 0
+        best_frame = None
+
+        # 采样分「轮」（pass）：第一轮只认出两色时再采一轮再谈推断 ——
+        # 既然赛题必定给三颗，先多要点票数比直接开推更划算（票是同一机位、可累加）。
+        pas, pass_limit = 0, 1
+        while pas < pass_limit:
+            while time.time() < deadline and frames_seen < COLOR_VOTE_FRAMES * (pas + 1):
+                # 可随时打断：每一轮先检查中断信号
+                if abort_event is not None and abort_event.is_set():
+                    print("[INFO] 色球识别任务被打断")
+                    return {"success": False, "aborted": True, "reason": "",
+                            "frame": None, "targets": []}
+
+                frame = CameraManager.read(cap, "Main Camera", max_retries=3)
+                if frame is None:
+                    time.sleep(0.05)
+                    continue
+                balls, _small = _detect_frame(frame, COLOR_PROC_SCALE)
+                frames_seen += 1
+                if balls:
+                    best_frame = frame
+                for b in balls:
+                    votes[b["color"]].append((b["cx"], b["cy"], b["r"]))
+
+                time.sleep(0.01)  # 避免空转刷满 CPU
+
+            n_ready = sum(1 for c in (1, 2, 3) if len(votes[c]) >= COLOR_MIN_VOTES)
+            if pas == 0 and n_ready == 2 and COLOR_INFER_RETRY:
+                print("[INFO] 只认出两色 → 再采一轮（推断之前先多要票）")
+                pass_limit = 2
+            pas += 1
+
+        # 众数（出现帧数）判存在 + 中位数取坐标（按颜色分别投票）
+        targets = []
+        for c in (1, 2, 3):
+            pts = votes[c]
+            if len(pts) < COLOR_MIN_VOTES:
+                continue
+            xs = sorted(p[0] for p in pts)
+            ys = sorted(p[1] for p in pts)
+            rs = sorted(p[2] for p in pts)
+            if xs[-1] - xs[0] > COLOR_MAX_SPREAD_PX:
+                print(f"[WARN] 色球[{COLOR_COLOR_NAMES.get(c, c)}] 跨帧散布 "
+                      f"{xs[-1] - xs[0]:.0f}px 超限（车在动或误检），作废")
+                continue
+            targets.append({"color": c,
+                            "color_name": COLOR_COLOR_NAMES.get(c, str(c)),
+                            "cx": _median(xs), "cy": _median(ys),
+                            "r": _median(rs),
+                            "votes": len(pts)})
+
+        targets.sort(key=lambda t: t["cx"])
+
+        # 缺球推断：只认出两颗 → 用板子坐标系（或两球外推）把第三颗推回来。
+        # 推不出来就**不推**，照旧判失败（宁可长鸣也不给假坐标）。
+        if len(targets) == COLOR_INFER_MIN_BALLS and COLOR_INFER_EN:
+            before = {t["color"] for t in targets}
+            targets, note = _infer_missing(best_frame, targets, COLOR_COLOR_NAMES)
+            if note:
+                new = [t for t in targets if t["color"] not in before]
+                t = new[0] if new else targets[1]
+                print(f"[INFO] 缺球推断: 补上 {t['color_name']} "
+                      f"({t['cx']:.0f},{t['cy']:.0f}) ← {note}")
+            else:
+                print("[INFO] 缺球推断: 不成立（判据不过），这一步按失败处理")
+
+        ok = (len(targets) >= COLOR_MIN_TARGETS)
+        if ok and len(targets) > COLOR_MAX_TARGETS:
+            targets = targets[:COLOR_MAX_TARGETS]
+        if ok:
+            gaps = [targets[i + 1]["cx"] - targets[i]["cx"]
+                    for i in range(len(targets) - 1)]
+            if gaps and min(gaps) < COLOR_MIN_GAP_PX:
+                ok = False
+                print(f"[WARN] 色球中心间隔过小 {min(gaps):.0f}px，疑似同一球裂成两块")
+
+        if ok:
+            yaw, fit_ok = fit_line_yaw(targets)
+            order = " ".join(t["color_name"] for t in targets)
+            print(f"[INFO] 色球识别成功（从左到右）: {order} "
+                  f"连线角 {yaw:+.2f}° 共线{'OK' if fit_ok else 'NG'}")
+            # 结果回传由 handler.py::_cmd_color 统一发送，任务层不碰串口
+            annotated = (_annotate(best_frame, targets,
+                                   extra=f"line {yaw:+.2f}deg fit{int(fit_ok)}")
+                         if best_frame is not None else None)
+            return {"success": True, "reason": "", "frame": annotated,
+                    "targets": targets, "yaw": yaw, "fit_ok": fit_ok}
+
+        reason = f"色球识别超时/不足 ({timeout:.0f}s)：三色齐备 {len(targets)}/3"
+        print(f"[WARN] {reason}")
+        annotated = _annotate(best_frame, targets) if best_frame is not None else None
+        return {"success": False, "reason": reason, "frame": annotated,
+                "targets": targets, "yaw": 0.0, "fit_ok": False}
+    finally:
+        release_camera(cap)     # 租约句柄 → 归还（保持打开）; 普通 cap → 真释放

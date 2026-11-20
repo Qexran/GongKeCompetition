@@ -1,0 +1,24 @@
+# GKS 视觉引导系统 — 设备号固定绑定
+#
+# 安装（改完要 reload）：
+#   sudo cp 99-gks-devices.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=tty
+#
+# ---- 两个 CH340 串口：按芯片版本号 bcdDevice 区分 ----
+# 两个 dongle 的 idVendor:idProduct 都是 1a86:7523、都没有序列号，唯一能区分的是
+# USB 描述符里的 bcdDevice（芯片版本号）：
+#   8134 → 单片机主串口（原来的 USB 1-1.4 那根）→ /dev/ttyUSB_GKS
+#   0264 → ATK-USB-UART → OpenMV 寻线            → /dev/ttyUSB_OpenMV
+# 条件互斥，不需要 GOTO 防双匹配。
+#
+# ⚠ 曾按 KERNELS=="1-1.4"（物理插口）绑：插反一次就「静默认错」—— 单片机的口开得开、
+#   只是永远不应答，OpenMV 的口也报「已连接」却零字节，界面看着一切正常，很难查。
+#   认口手法见 CLAUDE.md「串口（两个 CH340）」节。
+# ⚠ 换新 dongle（bcdDevice 变了）时这两行要跟着改，否则两个符号链接都不建
+#   （报「串口不存在」——响亮的故障，好过悄悄认错）。
+SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", ATTRS{bcdDevice}=="8134", SYMLINK+="ttyUSB_GKS"
+SUBSYSTEM=="tty", SUBSYSTEMS=="usb", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", ATTRS{bcdDevice}=="0264", SYMLINK+="ttyUSB_OpenMV"
+
+# ---- 摄像头不在这里：由 ~/Desktop/fix_device.sh 生成 99-fixed-devices.rules（按物理端口） ----
+# 摄像头 VID 随模组更换而变（现值 05a3:2b01、2ce3:0010），按端口绑反而稳；串口两个 CH340
+# 同 VID:PID，只能靠上表的 bcdDevice 区分。
