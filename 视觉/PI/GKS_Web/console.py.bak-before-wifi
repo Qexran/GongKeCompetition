@@ -1,0 +1,276 @@
+# console.py — 控制台后端（网络 / 服务 / 电源 / 系统状态）
+#
+# 移植自 GKS_Competition/control_panel.py 的非 GUI 逻辑（去掉 PyQt），
+# 供 app.py 的 HTTP 路由调用。所有 sudo 命令依赖用户 xixi 的 NOPASSWD 权限。
+import os
+import socket
+import subprocess
+import time
+
+from webconfig import (GKS_SERVICE, WEB_SERVICE, GKS_COMPETITION_DIR,
+                       FIX_DEVICE_SCRIPT)
+
+
+# ---- 基础 ----
+def run_cmd(cmd, timeout=5):
+    try:
+        p = subprocess.run(cmd, shell=True, capture_output=True,
+                           text=True, timeout=timeout)
+        return p.stdout.strip(), p.stderr.strip(), p.returncode
+    except subprocess.TimeoutExpired:
+        return "", "timeout", -1
+    except Exception as e:
+        return "", str(e), -1
+
+
+# ---- 网络 ----
+def get_ip_addresses():
+    ips = []
+    try:
+        out = subprocess.check_output(["hostname", "-I"], text=True).strip()
+        ips = [ip for ip in out.split()
+               if ip.count(".") == 3 and not ip.startswith("127.")]
+    except Exception:
+        pass
+    if not ips:
+        try:
+            out = subprocess.check_output(["ip", "-4", "-br", "addr"], text=True)
+            for line in out.strip().split("\n"):
+                parts = line.split()
+                for p in parts:
+                    if "/" in p and p.count(".") == 3:
+                        ip = p.split("/")[0]
+                        if not ip.startswith("127."):
+                            ips.append(ip)
+        except Exception:
+            pass
+    return ips if ips else ["no ip"]
+
+
+def get_hostname():
+    return socket.gethostname()
+
+
+# ---- 服务状态 / 控制（gks.service = GKS 主程序）----
+def is_service_active():
+    _, _, rc = run_cmd(f"systemctl is-active --quiet {GKS_SERVICE}")
+    return rc == 0
+
+
+def is_service_enabled():
+    _, _, rc = run_cmd(f"systemctl is-enabled --quiet {GKS_SERVICE}")
+    return rc == 0
+
+
+def start_service():
+    _, stderr, rc = run_cmd(f"sudo systemctl start --no-block {GKS_SERVICE}")
+    return rc == 0, stderr
+
+
+def stop_service():
+    _, stderr, rc = run_cmd(f"sudo systemctl stop --no-block {GKS_SERVICE}")
+    return rc == 0, stderr
+
+
+def enable_service():
+    _, stderr, rc = run_cmd(f"sudo systemctl enable {GKS_SERVICE}")
+    return rc == 0, stderr
+
+
+def disable_service():
+    _, stderr, rc = run_cmd(f"sudo systemctl disable {GKS_SERVICE}")
+    return rc == 0, stderr
+
+
+def restart_service():
+    """重启 gks.service（未运行则直接启动）。"""
+    _, stderr, rc = run_cmd(f"sudo systemctl restart {GKS_SERVICE}")
+    return rc == 0, stderr
+
+
+# ---- 本 Web 控制端自身（gks-web.service）----
+# ⚠ 与上面 gks.service 的区别：这几个操作的目标就是**本进程自己**。
+#   改完 app.py / console.py 等源码后，正是靠这里重启才会生效。
+def is_web_service_active():
+    _, _, rc = run_cmd(f"systemctl is-active --quiet {WEB_SERVICE}")
+    return rc == 0
+
+
+def is_web_service_enabled():
+    _, _, rc = run_cmd(f"systemctl is-enabled --quiet {WEB_SERVICE}")
+    return rc == 0
+
+
+def enable_web_service():
+    _, stderr, rc = run_cmd(f"sudo systemctl enable {WEB_SERVICE}")
+    return rc == 0, stderr
+
+
+def disable_web_service():
+    _, stderr, rc = run_cmd(f"sudo systemctl disable {WEB_SERVICE}")
+    return rc == 0, stderr
+
+
+def restart_web_service():
+    """重启本 Web 控制端自身（gks-web.service）。
+
+    必须「延迟 + 脱离会话」执行：systemctl restart 会立刻杀掉本进程，若同步等待，
+    HTTP 响应还没发出去进程就没了，浏览器只会看到连接中断（且分不清是重启还是崩了）。
+    故用 start_new_session 起一个独立后台 shell，先 sleep 1s 让本响应发完，再重启。
+
+    返回 (ok, message)；ok=True 只表示「已安排重启」，不代表重启已成功。
+    """
+    try:
+        subprocess.Popen(
+            f"sleep 1; sudo systemctl restart {WEB_SERVICE}",
+            shell=True, start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return True, "Web 控制端将在 1 秒后重启，页面会自动恢复"
+    except Exception as e:
+        return False, f"安排重启失败: {e}"
+
+
+# ---- 设备固定（udev 符号链接）----
+def fix_devices(timeout=30):
+    """运行设备固定脚本，重新生成并应用 udev 规则（摄像头/串口 → 固定符号链接）。
+
+    非交互模式（--apply）：按当前检测到的设备自动生成规则 + reload + trigger。
+    ⚠ 脚本按「检测到的先后顺序」命名摄像头，调用方必须先确认两个摄像头都已插入，
+    否则只插一个时它会被命名成 camera_main，与 camera_Qr 角色对调。
+
+    返回 (ok, 输出文本)；输出含检测详情与符号链接验证结果，可直接展示给用户。
+    """
+    if not os.path.exists(FIX_DEVICE_SCRIPT):
+        return False, f"脚本不存在: {FIX_DEVICE_SCRIPT}"
+    out, err, rc = run_cmd(f"sudo bash {FIX_DEVICE_SCRIPT} --apply", timeout=timeout)
+    text = out + (("\n" + err) if err else "")
+    return rc == 0, (text.strip() or "(无输出)")
+
+
+# ---- 直接启停 main.py（调试模式，不走 systemd）----
+def is_main_py_running():
+    """是否有 GKS_Competition/main.py 进程在运行（不限启动方式）。
+
+    用路径精确匹配，避免误匹配 cv_python 等其他项目的 main.py。
+    """
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "GKS_Competition/main.py"],
+            capture_output=True, text=True, timeout=3)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def start_main_py():
+    """直接后台启动 main.py（调试模式，无自动重启）。"""
+    if is_main_py_running():
+        return False, "main.py 已在运行中"
+    try:
+        subprocess.Popen(
+            ["python3", os.path.join(GKS_COMPETITION_DIR, "main.py")],
+            cwd=GKS_COMPETITION_DIR,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True)
+        return True, "main.py 已在后台启动（调试模式：无自动重启）"
+    except Exception as e:
+        return False, f"启动失败: {e}"
+
+
+def kill_main_py():
+    """终止 main.py。先停 systemd 防止 Restart=always 自动复活。"""
+    if not is_main_py_running():
+        return False, "main.py 本来就没有在运行"
+    if is_service_active():
+        _, stderr, rc = run_cmd(f"sudo systemctl stop {GKS_SERVICE}", timeout=15)
+        if rc != 0:
+            print(f"[WARN] systemd 停止异常: {stderr}")
+    try:
+        subprocess.run(["pkill", "-f", "GKS_Competition/main.py"], timeout=5)
+    except subprocess.TimeoutExpired:
+        pass
+    if is_main_py_running():
+        return False, "main.py 进程可能未能终止，请重试"
+    return True, "main.py 已终止（systemd 已停止，手动进程已清理）"
+
+
+def restart_main_py():
+    """重启 main.py（调试模式）：先彻底终止现有进程，再启动新的。"""
+    kill_main_py()
+    # 等旧进程完全退出（最多 3 秒）
+    for _ in range(30):
+        if not is_main_py_running():
+            break
+        time.sleep(0.1)
+    return start_main_py()
+
+
+# ---- 系统状态 ----
+def get_system_status():
+    status = {}
+
+    # CPU 温度
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp") as f:
+            status["cpu_temp"] = round(int(f.read().strip()) / 1000.0, 1)
+    except Exception:
+        status["cpu_temp"] = None
+
+    # 负载
+    try:
+        with open("/proc/loadavg") as f:
+            a, b, c = f.read().split()[:3]
+        status["load"] = {"1min": float(a), "5min": float(b), "15min": float(c)}
+    except Exception:
+        status["load"] = None
+
+    # 内存
+    try:
+        mem = {}
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    mem["total_kb"] = int(line.split()[1])
+                elif line.startswith("MemAvailable:"):
+                    mem["avail_kb"] = int(line.split()[1])
+        if "total_kb" in mem and "avail_kb" in mem:
+            mem["used_kb"] = mem["total_kb"] - mem["avail_kb"]
+        status["mem"] = mem if "total_kb" in mem else None
+    except Exception:
+        status["mem"] = None
+
+    # 磁盘
+    try:
+        out = subprocess.check_output(["df", "-h", "/"], text=True)
+        cols = out.strip().split("\n")[-1].split()
+        status["disk"] = {"fs": cols[0], "size": cols[1], "used": cols[2],
+                          "avail": cols[3], "use%": cols[4]}
+    except Exception:
+        status["disk"] = None
+
+    # 运行时长
+    try:
+        with open("/proc/uptime") as f:
+            status["uptime_sec"] = int(float(f.read().split()[0]))
+    except Exception:
+        status["uptime_sec"] = None
+
+    return status
+
+
+# ---- 电源 ----
+def reboot():
+    out, err, rc = run_cmd("sudo shutdown -r now")
+    return rc == 0, err
+
+
+def shutdown():
+    out, err, rc = run_cmd("sudo shutdown -h now")
+    return rc == 0, err
+
+
+# ---- 日志 ----
+def get_log(unit, lines=200):
+    out, _, _ = run_cmd(
+        f"journalctl -u {unit} -n {lines} --no-pager --output=cat", timeout=10)
+    return out

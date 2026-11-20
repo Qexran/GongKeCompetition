@@ -1,0 +1,24 @@
+[Unit]
+Description=GKS Web 控制端
+After=network.target multi-user.target
+
+[Service]
+Type=simple
+User=xixi
+WorkingDirectory=/home/xixi/Desktop/GKS_Web
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/usr/bin/python3 -u /home/xixi/Desktop/GKS_Web/app.py
+Restart=always
+RestartSec=5
+StartLimitBurst=0
+TimeoutStopSec=10
+# 只给主进程（app.py）发信号: 默认的 KillMode=control-group 会把整个 cgroup 一起杀 ——
+# 页面「启动主程序」（console.start_main_py，Popen start_new_session）起的 main.py 仍在这个
+# cgroup 里 ⇒ 每次重启控制端都会把正在跑的 main.py 一起带走（2026-10-16 现场踩到）。
+# 控制端本来就该是"拉起兄弟进程"的角色，故用 process。
+KillMode=process
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
