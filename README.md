@@ -12,6 +12,19 @@
 
 <p align="center"><sub>3.5 m × 3.5 m 赛场示意</sub></p>
 
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="assets/target-detection.jpg" alt="三色靶盘识别">
+      <br><sub>三色靶盘识别：环心定位与瞄准点</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="assets/color-ball-detection.jpg" alt="色球识别">
+      <br><sub>色球识别：三色掩膜、检测框与球心定位</sub>
+    </td>
+  </tr>
+</table>
+
 ## 📁 目录结构
 
 | 目录             | 内容                                                                        |
@@ -141,21 +154,6 @@ Web 控制台会直接生成 `map.c` 和 `map.h`。积木的参数注释以一�
 ### 控制台实现
 
 Web 控制台基于 Python 标准库实现，前端是原生 JS，一共 11 个页签：地图、调参、位移、自定义、标定、采集、调试助手、蓝牙、机械臂、底盘动作组、OLED。它会把路线、参数、标定和机械臂动作直接写回仓库源文件，多客户端之间用版本号和 409 乐观锁同步。另有一个无头单片机模拟器，没接实车时也能在页面上发指令调试。
-
-## 🖼️ 图片
-
-<table>
-  <tr>
-    <td width="50%" align="center">
-      <img src="assets/target-detection.jpg" alt="三色靶盘识别">
-      <br><sub>三色靶盘识别：环心定位与瞄准点</sub>
-    </td>
-    <td width="50%" align="center">
-      <img src="assets/color-ball-detection.jpg" alt="色球识别">
-      <br><sub>色球识别：三色掩膜、检测框与球心定位</sub>
-    </td>
-  </tr>
-</table>
 
 ## 📚 文档
 
