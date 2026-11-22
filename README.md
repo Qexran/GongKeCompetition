@@ -45,44 +45,48 @@
 
 <table>
   <tr>
-    <td width="33%" align="center">
+    <td width="50%" align="center">
       <img src="assets/console/map.png" width="100%" alt="地图 Tab">
       <br><sub>地图：积木化编辑路线</sub>
     </td>
-    <td width="33%" align="center">
+    <td width="50%" align="center">
       <img src="assets/console/tuning.png" width="100%" alt="调参 Tab">
       <br><sub>调参：宏参数在线调整</sub>
     </td>
-    <td width="33%" align="center">
+  </tr>
+  <tr>
+    <td width="50%" align="center">
       <img src="assets/console/moves.png" width="100%" alt="位移 Tab">
       <br><sub>位移：路线位移与示意图</sub>
     </td>
-  </tr>
-  <tr>
-    <td width="33%" align="center">
+    <td width="50%" align="center">
       <img src="assets/console/switches.png" width="100%" alt="自定义 Tab">
       <br><sub>自定义：IF 条件开关</sub>
     </td>
-    <td width="33%" align="center">
+  </tr>
+  <tr>
+    <td width="50%" align="center">
       <img src="assets/console/calib.png" width="100%" alt="标定 Tab">
       <br><sub>标定：一台主摄一套预设</sub>
     </td>
-    <td width="33%" align="center">
+    <td width="50%" align="center">
       <img src="assets/console/capture.png" width="100%" alt="采集 Tab">
       <br><sub>采集：YOLO 数据集采集</sub>
     </td>
   </tr>
   <tr>
-    <td width="33%" align="center">
+    <td width="50%" align="center">
       <img src="assets/console/debug.png" width="100%" alt="调试助手 Tab">
       <br><sub>调试助手：树莓派联机工具</sub>
     </td>
-    <td width="33%" align="center">
+    <td width="50%" align="center">
       <img src="assets/console/arm.png" width="100%" alt="机械臂 Tab">
       <br><sub>机械臂：位姿示教与动作预设</sub>
     </td>
-    <td width="33%" align="center">
-      <img src="assets/console/oled.png" width="100%" alt="OLED Tab">
+  </tr>
+  <tr>
+    <td colspan="2" align="center">
+      <img src="assets/console/oled.png" width="50%" alt="OLED Tab">
       <br><sub>OLED：菜单表与 128×64 预览</sub>
     </td>
   </tr>
