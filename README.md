@@ -7,55 +7,202 @@
 比赛任务大致是：从出发区扫码拿到任务码，按码选择左右路线，沿途完成排爆区的色球抓取、反恐区的人质识别与抓取、靶标区的激光打靶，最后越过减速带返回终点。机器人采用四轮麦克纳姆轮底盘和六轴机械臂，STM32F407 负责实时控制，树莓派负责视觉识别，OpenMV 作为独立巡线传感器。
 
 <p align="center">
-  <img src="模型/地图图片/DefaultMap.JPG" width="720" alt="赛场地图">
+  <img src="assets/map-and-car.jpg" width="820" alt="赛场地图与整车实物">
 </p>
+<p align="center"><sub>左：赛场地图示意　右：整车实物</sub></p>
 
-<p align="center"><sub>3.5 m × 3.5 m 赛场示意</sub></p>
+## ⚙️ 实现说明
+
+这一段重点写上位机。
+
+比赛现场留给调试的时间很少。如果每次改路线、改参数、标定相机、录机械臂动作都要改 C 代码再编译，时间根本不够。所以这套工程把「流程」和「参数」从固件里搬了出来，做成上位机可以直接读写的数据。
+
+上位机是 `电控/GongKeCompetition/tools/webconsole/` 下的本地 Web 控制台：Python 标准库 + 原生 JS，双击 `webconsole.bat` 后浏览器打开 `:8410`。它没有 Flask/Django 之类的外部框架依赖，所有读写都直接落在仓库里的源文件和 JSON 清单上；多个人同时开页面时，用版本号和 409 乐观锁避免互相覆盖。
+
+控制台围绕三份源码工作：
+
+- `map.c`：路线表，一行一个步骤。
+- `app_script.h`：步骤的参数注释 DSL，控制台据此生成积木库、参数名、单位和下拉选项。
+- `app_config.h`：`#define` 的尾注释，控制台据此生成「调参」页的分组、显示名、范围和换算。
+
+这三份文件是唯一数据源，控制台不维护另一套路线/参数数据库。改完保存，源码就变了；Keil 重新编译烧录即可。
+
+### 十一个 Tab
+
+| Tab | 作用 |
+|---|---|
+| 地图 | 积木化编辑 `map.c`：拖步骤、改参数、加 `IF/ELSE`、调用子预设、整块禁用；保存时同时生成 `map.h` 的预设枚举。 |
+| 调参 | 把 `app_config.h` 的 `#define` 变成可调参数，分组、显示名、单位、范围和换算都来自尾注释；写回时保持原类型。 |
+| 位移 | 管理路线里的 `MOVE_*` 位移变量，并配一张赛场示意图，把变量和地图上的路段对应起来。 |
+| 自定义 | 新建 `STEP_IF` 的编译期条件开关，一次改三处：宏、枚举、求值 getter，地图里立刻能选。 |
+| 标定 | 按主摄个体保存/切换 19 个标定宏，一台相机一套预设，换相机不用重新手抄参数。 |
+| 采集 | 摄像头预览 + 分类采集，直接给 YOLOv8 数据集攒图。 |
+| 调试助手 | 一键连树莓派：更新 SSH/网络位置、远程桌面、远程文件夹、远程 VSCode、常用命令。 |
+| 蓝牙 | 通过蓝牙串口在线读写固件 Beam 参数、点动机械臂；参数面板完全由设备上报，不在 PC 端写死。 |
+| 机械臂 | 拖滑杆录位姿，存成动作预设；保存后在地图里变成一块大积木，可直接拖进路线。 |
+| 底盘动作组 | 用时间轴把平移、转弯、臂动作叠加成一组底盘动作，固件按 20 ms 一拍混合播放。 |
+| OLED | 编辑 OLED 菜单表和子菜单，右侧 128×64 预览；缺汉字时自动补字模。 |
 
 <table>
   <tr>
-    <td width="50%" align="center">
-      <img src="assets/target-detection.jpg" alt="三色靶盘识别">
-      <br><sub>三色靶盘识别：环心定位与瞄准点</sub>
+    <td width="33%" align="center">
+      <img src="assets/console/map.png" width="100%" alt="地图 Tab">
+      <br><sub>地图：积木化编辑路线</sub>
     </td>
-    <td width="50%" align="center">
-      <img src="assets/color-ball-detection.jpg" alt="色球识别">
-      <br><sub>色球识别：三色掩膜、检测框与球心定位</sub>
+    <td width="33%" align="center">
+      <img src="assets/console/tuning.png" width="100%" alt="调参 Tab">
+      <br><sub>调参：宏参数在线调整</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="assets/console/moves.png" width="100%" alt="位移 Tab">
+      <br><sub>位移：路线位移与示意图</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" align="center">
+      <img src="assets/console/switches.png" width="100%" alt="自定义 Tab">
+      <br><sub>自定义：IF 条件开关</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="assets/console/calib.png" width="100%" alt="标定 Tab">
+      <br><sub>标定：一台主摄一套预设</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="assets/console/capture.png" width="100%" alt="采集 Tab">
+      <br><sub>采集：YOLO 数据集采集</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="33%" align="center">
+      <img src="assets/console/debug.png" width="100%" alt="调试助手 Tab">
+      <br><sub>调试助手：树莓派联机工具</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="assets/console/arm.png" width="100%" alt="机械臂 Tab">
+      <br><sub>机械臂：位姿示教与动作预设</sub>
+    </td>
+    <td width="33%" align="center">
+      <img src="assets/console/oled.png" width="100%" alt="OLED Tab">
+      <br><sub>OLED：菜单表与 128×64 预览</sub>
     </td>
   </tr>
 </table>
 
+截图里的「地图」页正在编辑默认路线，一共 47 步；左边是积木库，中间是路线，右边是选中步骤的参数详情。
+
+### 为什么能快速复用到其他小车题目
+
+这套东西不是只为这一道题写的。把赛题拆开看，绝大多数小车题都是「移动 → 识别 → 执行机构动作」的组合。控制台把这三种东西都变成了可视化数据：
+
+1. **移动**：`app_chassis.c` 里的原语（世界系平移、支点/原地转弯、巡线收敛）如果够用，直接在「地图」里拖；不够就加一个 `STEP_*` 和对应动作函数。
+2. **识别**：树莓派/OpenMV 返回结果帧，固件侧包成一个 `STEP_*_WAIT`，控制台里就是一块积木；相机预热、结果超时、失败分支都在步骤表里排。
+3. **执行机构**：机械臂动作、底盘动作组、OLED 菜单都是数据表，控制台负责录制/生成；换一个夹爪或云台，改的是表，不是调度逻辑。
+
+所以换题时通常只需要做四件事：接上新的传感器/执行器 → 在 `app_script.h` 写参数注释 → 在 `app_config.h` 写可调宏 → 在控制台里排路线、标定、示教。调度器、串口协议、参数读写、模拟器都不用重写。
+
+当然，前提是题目还能拆成步骤。如果控制架构完全不同，还是要改执行器。
+
+### 视觉任务
+
+视觉任务也走同一套接口。树莓派负责识别，结果通过串口结果帧回传；固件侧只看到「一个阻塞步骤 + 一个超时」。下面几张是比赛现场的实际识别画面：
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="assets/vision/target.jpg" width="100%" alt="靶标识别">
+      <br><sub>靶标：三色靶环 + 靶心定位</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="assets/vision/ball.jpg" width="100%" alt="色球识别">
+      <br><sub>色球：HSV 三色掩膜 + 多帧投票</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="assets/vision/hostage.jpg" width="100%" alt="人质识别">
+      <br><sub>人质：YOLOv8n 三分类（圆柱 / 圆锥 / 腰鼓）</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="assets/vision/road.jpg" width="100%" alt="看路">
+      <br><sub>看路：黄区边缘 + 横向/纵向偏差</sub>
+    </td>
+  </tr>
+</table>
+
+二维码有两条链路：常规图走 zxing + 裁剪/放大/CLAHE 重试，斜视或低分辨率图走自研几何重建 + 候选集匹配。巡线由 OpenMV 做距离剖面过零，树莓派以 50 Hz 下发 PID 转向，固件侧融合相机和陀螺仪。打靶识别用环内径比、跨色尺寸一致性、内边界圆心三条判据锁定靶盘，再由 20 Hz 靶心流和 10 Hz 舵机 P 环完成闭环。
+
+### 树莓派 Web 端
+
+除了 PC 端控制台，树莓派上还有一套独立的 GKS_Web（`:9000`），负责相机预览、参数、日志和单片机模拟器。两个进程互不影响，比赛时可以用手机或另一台电脑看画面、发指令。
+
+<table>
+  <tr>
+    <td width="50%" align="center">
+      <img src="assets/pi/control.png" width="100%" alt="控制区">
+      <br><sub>控制区：main.py / 服务 / 电源</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="assets/pi/params.png" width="100%" alt="参数区">
+      <br><sub>参数区：在线改视觉参数</sub>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" align="center">
+      <img src="assets/pi/simulator.png" width="100%" alt="模拟器区">
+      <br><sub>模拟器：没接实车也能发指令</sub>
+    </td>
+    <td width="50%" align="center">
+      <img src="assets/pi/logs.png" width="100%" alt="日志区">
+      <br><sub>日志区：运行日志与调试</sub>
+    </td>
+  </tr>
+</table>
+
+### 固件侧
+
+- `map.c` 是纯数据，`vScriptRun` 是执行器；改路线只动表。
+- 6 路 UART 全部 DMA 收发。接收侧有 IDLE 卡死检测、错误回调、5 s 重装三层兜底，发送侧是 DMA 环 + TC 中断链。
+- 跨模块共享状态统一放在 `app_beam.c`，外部只能通过 getter/setter 访问，不在各模块头文件里加裸 `extern`。
+- 业务 1 ms 中断只做舵机平滑和按键扫描，角度 PID 由独立任务以 50 ms 周期运行。
+- 中断优先级、临界区里能不能发串口、哪些 HAL 函数不能在 ISR 里调，这些规则都写在 `电控/GongKeCompetition/CLAUDE.md` 里。
+
 ## 📁 目录结构
 
-| 目录             | 内容                                                                        |
-| ---------------- | --------------------------------------------------------------------------- |
-| `电控/`        | STM32F407 固件（CubeMX + FreeRTOS + QEPack 驱动）、Web 控制台、固件专题文档 |
-| `视觉/PI/`     | 树莓派视觉工程 `GKS_Competition` 和 Web 端 `GKS_Web`                    |
-| `视觉/OPENMV/` | OpenMV 侧装巡线程序                                                         |
-| `训练/`        | 人质 YOLOv8 训练脚本与数据集、OpenMV 巡线训练工具、调试记录                 |
-| `模型/`        | SolidWorks / STEP / 3MF 结构模型、赛场地图与变式图                          |
-| `PCB/`         | 集成板 EasyEDA 工程与原理图                                                 |
-| `文档/`        | 赛项命题、评分标准、竞赛日程、设计报告与工程图                              |
-| `现场/`        | 决赛文档与现场资料                                                          |
+| 目录 | 内容 |
+|---|---|
+| `电控/` | STM32F407 固件（CubeMX + FreeRTOS + QEPack 驱动）、Web 控制台、固件专题文档 |
+| `视觉/PI/` | 树莓派视觉工程 `GKS_Competition` 和 Web 端 `GKS_Web` |
+| `视觉/OPENMV/` | OpenMV 侧装巡线程序 |
+| `训练/` | 人质 YOLOv8 训练脚本与数据集、OpenMV 巡线训练工具、调试记录 |
+| `模型/` | SolidWorks / STEP / 3MF 结构模型、赛场地图与变式图 |
+| `PCB/` | 集成板 EasyEDA 工程与原理图 |
+| `文档/` | 赛项命题、评分标准、竞赛日程、设计报告与工程图 |
+| `现场/` | 决赛文档与现场资料 |
 
 ## 🔧 硬件
 
-| 部分   | 型号 / 说明                                                    |
-| ------ | -------------------------------------------------------------- |
-| 主控   | STM32F407VET6 @168 MHz，FreeRTOS V11.3.0                       |
-| 视觉   | Raspberry Pi（Python 3 + OpenCV + YOLOv8n ONNX）               |
-| 巡线   | OpenMV，侧装，按需发送文本帧                                   |
-| 相机   | 2 路 USB 1080p（主摄 / 扫码）+ 1 路 CSI OV5647（固定视角打靶） |
-| 底盘   | 100 mm 麦克纳姆轮 ×4，EMM42 V5 闭环步进                       |
-| 机械臂 | 六轴机械臂，多路舵机驱动                                       |
-| 电源   | 9000 mAh 锂电池，自研集成板与稳压板                            |
-| 交互   | OLED 菜单、实体按键、蓝牙、Web 控制台                          |
+| 部分 | 型号 / 说明 |
+|---|---|
+| 主控 | STM32F407VET6 @168 MHz，FreeRTOS V11.3.0 |
+| 视觉 | Raspberry Pi（Python 3 + OpenCV + YOLOv8n ONNX） |
+| 巡线 | OpenMV，侧装，按需发送文本帧 |
+| 相机 | 2 路 USB 1080p（主摄 / 扫码）+ 1 路 CSI OV5647（固定视角打靶） |
+| 底盘 | 100 mm 麦克纳姆轮 ×4，EMM42 V5 闭环步进 |
+| 机械臂 | 六轴机械臂，多路舵机驱动 |
+| 电源 | 9000 mAh 锂电池 |
+| 交互 | OLED 菜单、实体按键、蓝牙、Web 控制台 |
 
 ## 🚀 运行
 
 ### 固件
 
-用 Keil MDK5（ARMCC V5.06）打开 `电控/GongKeCompetition/MDK-ARM/GongKeCompetition.uvprojx`，编译下载。命令行编译：
+直接用仓库里的 Keil 工程：
+
+```text
+电控/GongKeCompetition/MDK-ARM/GongKeCompetition.uvprojx
+```
+
+用 Keil MDK5（ARMCC V5.06）打开后编译下载。命令行编译：
 
 ```bash
 cd 电控/GongKeCompetition/MDK-ARM
@@ -64,7 +211,7 @@ UV4.exe -b GongKeCompetition.uvprojx -j0 -o build.log
 
 UV4 的退出码不反映编译成败，需要看日志最后一行的 `N Error(s)`。
 
-`GongKeCompetition.uvprojx` 被 `.gitignore` 忽略。从仓库重新构建时，用 CubeMX 打开 `GongKeCompetition.ioc` 生成工程，再把 `Application/app_*.c` 手动加入 `Application` 组。C 编译器 MiscControls 需要带 `--locale=C --diag_suppress=870`，否则源码里的中文注释在 AC5 下可能报引号错误。
+**不要用 CubeMX 重新生成这个工程。** 工程里有一部分配置不是 CubeMX 生成的，例如手写的 TX DMA 流、TIM9 补光灯 PWM、部分中断优先级，以及 MiscControls 里的 `--locale=C --diag_suppress=870`。重新生成会把这些配置冲掉，表现为串口、补光灯或舵机异常。CubeMX 只用来改 `.ioc` 里的外设初始化；改完把新增代码同步进现有工程，不要覆盖 `uvprojx`。
 
 ### 树莓派视觉
 
@@ -95,7 +242,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now gks.service
 python 电控/GongKeCompetition/tools/webconsole/server.py
 ```
 
-浏览器打开 `http://localhost:8410`。控制台可以编排路线、调参数、做相机标定、示教机械臂动作，也可以启动单片机模拟器。
+浏览器打开 `http://localhost:8410`。具体功能见上面的「实现说明」。
 
 控制台没有鉴权，并且绑定在 `0.0.0.0`，方便局域网内队友一起调试。只建议在可信网络里使用；如果场地网络不可控，把 `server.BIND_HOST` 改成 `127.0.0.1`。
 
@@ -103,68 +250,17 @@ python 电控/GongKeCompetition/tools/webconsole/server.py
 
 用 OpenMV IDE 打开 `视觉/OPENMV/main.py`，连接相机后运行。OpenMV 默认不发数据，收到树莓派的 `G` 后开始输出 `L,<offset>,<angle>,<valid>` 文本帧，收到 `S` 停止。
 
-## ⚙️ 实现说明
-
-### 路线表
-
-固件把比赛流程从代码里抽成了数据表。一条路线就是 `map.c` 里的一组步骤，改路线只改表，不改执行器：
-
-```c
-/* map.c 行格式范例 */
-SCRIPT_STEP    (STEP_WAIT_HANDSHAKE,      "等待握手"),                        // ucRpiHandshake()
-SCRIPT_STEP_I1 (STEP_QR_SCAN_WAIT,        "二维码扫描",    8000),             // ucRpiQrScan()
-SCRIPT_STEP_I1 (STEP_SCRIPT_CALL,         "执行任务一",    SCRIPT_PRESET_43), // vScriptCallPreset()
-```
-
-`map.c` 里目前有 45 套预设，可以在控制台里切换。条件分支直接在步骤表里写 `STEP_IF / STEP_ELSE / STEP_END_IF`，三块标记按位置配对，不占预设，也能任意嵌套。`STEP_SCRIPT_CALL / STEP_SCRIPT_RETURN` 用来复用公共路线段，带深度上限兜底。
-
-Web 控制台会直接生成 `map.c` 和 `map.h`。积木的参数注释以一种简单的 DSL 写在 `app_script.h` 里，控制台解析后用于显示参数名、单位和下拉选项。
-
-### 二维码
-
-新扫码引擎把 zxing 检测到、但解不出的二维码框当作检测器：先按检测框紧裁 1.6 倍，再放大到 960，做 CLAHE 增强，然后换几种二值化器重试。现场真帧的识别率从 2/10 提升到 10/10。
-
-另外有一套自研解码器，专门处理斜视、低分辨率、强透视的图：先做几何重建，再在已知候选集里做 RS 码字匹配。它只认 Version 1（21×21），候选集是赛题固定的 27 种三位码；几何错位只会解不出来，不会解出一个错误的数。整套实现只依赖 OpenCV 和 numpy，没有新增第三方依赖。
-
-### 靶标与射靶
-
-靶盘识别主要靠四条判据：
-
-- **环内径比 q**：内孔拟合半径 ÷ 外接圆半径。靶盘设计值 0.55，现场实测真靶 0.52~0.55，背景杂块基本不超过 0.23。
-- **跨色尺寸一致性**：在候选里挑一组尺寸匹配的靶，而不是每个颜色各取最大。
-- **内边界优先**：实拍外缘是手工贴的波浪边，内孔是干净的圆，所以圆心以内边界为准。
-- **包围盒局部掩膜**：每个候选只在自己的 bbox 里做处理。整帧耗时从约 1.0 s 降到约 0.22 s。
-
-识别之后进入流控闭环：树莓派在动态跟踪窗里以约 20 Hz 回传靶心，单片机以约 10 Hz 的 P 环微调舵机，直到收敛或超时。离线回放的 41 个用例里，三靶定位中位误差约 0.26 mm，95 分位约 0.66 mm。
-
-### 巡线与色球
-
-巡线用侧装 OpenMV。图像按横向条带切分，计算每条到上下参考色的色度距离差，取过零点作为交界位置。这个方法对阴影和黑条不敏感，比早期直接取色块主轴稳定很多。丢线时，OpenMV 会根据零星交界点的行位置和两侧参考色距离判断线丢在画面上方、下方还是不明，树莓派据此定向找线。树莓派以 50 Hz 下发 PID 转向，固件侧融合相机与陀螺仪。
-
-色球识别用 HSV 三色掩膜加多帧投票，凑满三颗才继续。只认出两颗时，会用板子四角做单应变换，按球在板上的固定位置把缺的那颗推回来；推断不成立就报失败，不会硬算。
-
-### 固件细节
-
-- 6 路 UART，接收走 DMA 循环 + IDLE 中断，发送走 DMA 环 + TC 中断链。
-- 接收侧有三层兜底：IDLE 卡死检测、`HAL_UART_ErrorCallback`、以及树莓派链路的 5 s 重装。
-- 跨模块共享状态统一放在 `app_beam.c`，外部只能通过 getter/setter 访问，不在各模块头文件里加裸 `extern`。
-- 业务 1 ms 中断只做舵机平滑和按键扫描，角度 PID 由独立任务以 50 ms 周期运行。
-- 中断优先级、临界区里能不能发串口、哪些 HAL 函数不能在 ISR 里调，这些规则都写在 `电控/GongKeCompetition/CLAUDE.md` 里。
-
-### 控制台实现
-
-Web 控制台基于 Python 标准库实现，前端是原生 JS，一共 11 个页签：地图、调参、位移、自定义、标定、采集、调试助手、蓝牙、机械臂、底盘动作组、OLED。它会把路线、参数、标定和机械臂动作直接写回仓库源文件，多客户端之间用版本号和 409 乐观锁同步。另有一个无头单片机模拟器，没接实车时也能在页面上发指令调试。
-
 ## 📚 文档
 
-| 文档                                                                                    | 内容                                                                                               |
-| --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| [`电控/GongKeCompetition/CLAUDE.md`](电控/GongKeCompetition/CLAUDE.md)                 | 固件全局规则、目录结构、中断与并发、脚本设计                                                       |
-| [`电控/GongKeCompetition/docs/`](电控/GongKeCompetition/docs/)                         | 13 篇专题：UART、Pi 链路、蓝牙、巡线、标靶、抓取、看路、OLED、传感器、底盘、控制台元数据、审查记录 |
-| [`视觉/PI/GKS_Competition/CLAUDE.md`](视觉/PI/GKS_Competition/CLAUDE.md)               | 树莓派端相机租约、CSI 持有、任务线程、链路自愈                                                     |
-| [`视觉/PI/GKS_Competition/docs/串口协议.md`](视觉/PI/GKS_Competition/docs/串口协议.md) | 双端串口帧协议：命令表、结果帧、CRC 与 Tag 分配                                                    |
-| [`视觉/PI/GKS_Web/CLAUDE.md`](视觉/PI/GKS_Web/CLAUDE.md)                               | Web 端：预览、参数页、模拟器、WiFi 切换                                                            |
-| [`文档/设计报告/设计报告.pdf`](文档/设计报告/设计报告.pdf)                             | 赛项设计报告                                                                                       |
+| 文档 | 内容 |
+|---|---|
+| [`电控/GongKeCompetition/CLAUDE.md`](电控/GongKeCompetition/CLAUDE.md) | 固件全局规则、目录结构、中断与并发、脚本设计 |
+| [`电控/GongKeCompetition/tools/webconsole/CLAUDE.md`](电控/GongKeCompetition/tools/webconsole/CLAUDE.md) | Web 控制台 11 个 Tab 的实现细节 |
+| [`电控/GongKeCompetition/docs/`](电控/GongKeCompetition/docs/) | 13 篇专题：UART、Pi 链路、蓝牙、巡线、标靶、抓取、看路、OLED、传感器、底盘、控制台元数据、审查记录 |
+| [`视觉/PI/GKS_Competition/CLAUDE.md`](视觉/PI/GKS_Competition/CLAUDE.md) | 树莓派端相机租约、CSI 持有、任务线程、链路自愈 |
+| [`视觉/PI/GKS_Competition/docs/串口协议.md`](视觉/PI/GKS_Competition/docs/串口协议.md) | 双端串口帧协议：命令表、结果帧、CRC 与 Tag 分配 |
+| [`视觉/PI/GKS_Web/CLAUDE.md`](视觉/PI/GKS_Web/CLAUDE.md) | Web 端：预览、参数页、模拟器、WiFi 切换 |
+| [`文档/设计报告/设计报告.pdf`](文档/设计报告/设计报告.pdf) | 赛项设计报告 |
 
 ## 📄 License
 
